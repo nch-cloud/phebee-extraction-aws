@@ -218,3 +218,16 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# SAM / deployment
+.aws-sam/
+samconfig.yaml
+packaged.yaml
+
+# Built wheels copied into the utility image (scripts/build_image.sh)
+dist/
+
+# Local run artefacts (account-specific values)
+run.json
+run-*.json
+image-uri.txt

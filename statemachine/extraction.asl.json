@@ -1,0 +1,132 @@
+{
+  "Comment": "phebee-extraction on AWS: plan (split) -> per batch: tool stages in order, then transform -> import-ready part files. All decisions are made by the plan job; this definition only iterates and submits.",
+  "StartAt": "Plan",
+  "States": {
+    "Plan": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::batch:submitJob.sync",
+      "Parameters": {
+        "JobDefinition": "${UtilityJobDefinitionArn}",
+        "JobQueue": "${CPUJobQueueArn}",
+        "JobName.$": "States.Format('{}-plan', $$.Execution.Name)",
+        "ContainerOverrides": {
+          "Command": ["phebee-extract-aws", "plan"],
+          "Environment": [
+            { "Name": "PHEBEE_RUN_CONFIG", "Value.$": "States.JsonToString($)" }
+          ]
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": ["Batch.AWSBatchException", "Batch.ServerException"],
+          "IntervalSeconds": 10,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0
+        }
+      ],
+      "ResultPath": null,
+      "Next": "ProcessBatches"
+    },
+    "ProcessBatches": {
+      "Type": "Map",
+      "Comment": "One child execution per planned batch, read from plan/batches.json.",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": { "InputType": "JSON" },
+        "Parameters": {
+          "Bucket.$": "$.bucket",
+          "Key.$": "States.Format('{}/plan/batches.json', $.prefix)"
+        }
+      },
+      "MaxConcurrency": ${MaxConcurrency},
+      "ToleratedFailurePercentage": ${ToleratedFailurePercentage},
+      "ItemProcessor": {
+        "ProcessorConfig": { "Mode": "DISTRIBUTED", "ExecutionType": "STANDARD" },
+        "StartAt": "RunStages",
+        "States": {
+          "RunStages": {
+            "Type": "Map",
+            "Comment": "The tools, in pipeline order; each reads the previous one's output. The plan supplies each stage's full environment (I/O URIs plus the tool's own variables).",
+            "ItemsPath": "$.stages",
+            "MaxConcurrency": 1,
+            "ItemSelector": {
+              "batch_id.$": "$.batch_id",
+              "stage.$": "$$.Map.Item.Value"
+            },
+            "ItemProcessor": {
+              "ProcessorConfig": { "Mode": "INLINE" },
+              "StartAt": "RunStage",
+              "States": {
+                "RunStage": {
+                  "Type": "Task",
+                  "Resource": "arn:aws:states:::batch:submitJob.sync",
+                  "Parameters": {
+                    "JobDefinition.$": "$.stage.job_definition",
+                    "JobQueue.$": "$.stage.job_queue",
+                    "JobName.$": "States.Format('{}-{}', $.batch_id, $.stage.name)",
+                    "ContainerOverrides": {
+                      "Environment.$": "$.stage.environment"
+                    }
+                  },
+                  "Retry": [
+                    {
+                      "ErrorEquals": ["Batch.AWSBatchException", "Batch.ServerException"],
+                      "IntervalSeconds": 10,
+                      "MaxAttempts": 3,
+                      "BackoffRate": 2.0
+                    }
+                  ],
+                  "ResultPath": null,
+                  "End": true
+                }
+              }
+            },
+            "ResultPath": null,
+            "Next": "Transform"
+          },
+          "Transform": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::batch:submitJob.sync",
+            "Parameters": {
+              "JobDefinition": "${UtilityJobDefinitionArn}",
+              "JobQueue": "${CPUJobQueueArn}",
+              "JobName.$": "States.Format('{}-transform', $.batch_id)",
+              "ContainerOverrides": {
+                "Command": ["phebee-extract-aws", "transform"],
+                "Environment": [
+                  { "Name": "PHEBEE_BATCH_ITEM", "Value.$": "States.JsonToString($)" }
+                ]
+              }
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["Batch.AWSBatchException", "Batch.ServerException"],
+                "IntervalSeconds": 10,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "ResultSelector": {
+              "batch_id.$": "$$.Execution.Input.batch_id",
+              "status": "success"
+            },
+            "End": true
+          }
+        }
+      },
+      "ResultWriter": {
+        "Resource": "arn:aws:states:::s3:putObject",
+        "Parameters": {
+          "Bucket.$": "$.bucket",
+          "Prefix.$": "States.Format('{}/plan/results', $.prefix)"
+        }
+      },
+      "ResultPath": "$.batches",
+      "Next": "Done"
+    },
+    "Done": {
+      "Type": "Succeed",
+      "Comment": "Part files are under s3://{bucket}/{prefix}/jsonl/, ready for PheBee bulk import."
+    }
+  }
+}

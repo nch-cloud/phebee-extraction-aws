@@ -1,0 +1,103 @@
+# Deploy to an AWS account: build and push the utility image, then `sam deploy`.
+#
+# Manual trigger only. It never runs on pushes or pull requests, so it is safe to keep in a
+# fork or a public repo; nothing happens until someone with access to the chosen environment
+# runs it. It is also the reference for plugging this repo into another deployment system:
+# the whole contract is the two steps "build and push the image" and "sam deploy with these
+# parameters".
+#
+# Configure a GitHub environment (e.g. `dev`, `prod`) with:
+#   variables  AWS_REGION, AWS_DEPLOY_ROLE_ARN, UTILITY_ECR_REPOSITORY, STACK_NAME, APP_NAME,
+#              CPU_JOB_QUEUE_ARN, GPU_JOB_QUEUE_ARN (may be empty),
+#              PLATFORM (linux/arm64 or linux/amd64; must match the CPU queue's instances),
+#              S3_ACCESS_LOG_BUCKET (optional; required where guardrails demand S3 access logging)
+# AWS_DEPLOY_ROLE_ARN is a role that trusts GitHub's OIDC provider for this repository and
+# can push to the ECR repository and run CloudFormation for the stack. No AWS keys are stored.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment holding the target account's settings
+        type: environment
+        required: true
+
+permissions:
+  id-token: write # OIDC token for assuming the AWS role
+  contents: read
+
+concurrency:
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so `git describe` can name the build
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+
+
+      - name: Build and push the utility image
+        # Two tags for the same image: a readable one from `git describe` (exactly the release
+        # tag when deploying a tag, e.g. v0.2.0; otherwise v0.1.0-5-gabc1234, "five commits past
+        # v0.1.0") and the full commit SHA for exact traceability. The stack is pointed at the
+        # digest, so tags are labels for humans.
+        env:
+          PLATFORM: ${{ vars.PLATFORM || 'linux/arm64' }}
+        run: |
+          export IMAGE_TAG="$(git describe --tags --always)"
+          scripts/build_image.sh --push "${{ vars.UTILITY_ECR_REPOSITORY }}" \
+            --also-tag "${{ github.sha }}" --output image-uri.txt
+
+      - name: Deploy the stack
+        env:
+          GPU_JOB_QUEUE_ARN: ${{ vars.GPU_JOB_QUEUE_ARN }}
+          S3_ACCESS_LOG_BUCKET: ${{ vars.S3_ACCESS_LOG_BUCKET }}
+        run: |
+          # SAM rejects an empty parameter value, so only pass the GPU queue when there is one
+          OVERRIDES=("AppName=${{ vars.APP_NAME }}"
+                     "CPUJobQueueArn=${{ vars.CPU_JOB_QUEUE_ARN }}"
+                     "UtilityImageUri=$(cat image-uri.txt)")
+          if [ -n "$GPU_JOB_QUEUE_ARN" ]; then OVERRIDES+=("GPUJobQueueArn=$GPU_JOB_QUEUE_ARN"); fi
+          if [ -n "$S3_ACCESS_LOG_BUCKET" ]; then OVERRIDES+=("S3AccessLogBucketName=$S3_ACCESS_LOG_BUCKET"); fi
+          sam build
+          sam deploy \
+            --stack-name "${{ vars.STACK_NAME }}" \
+            --region "${{ vars.AWS_REGION }}" \
+            --resolve-s3 \
+            --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
+            --no-confirm-changeset \
+            --no-fail-on-empty-changeset \
+            --parameter-overrides "${OVERRIDES[@]}"
+
+      - name: Summary
+        run: |
+          {
+            echo "### Deployed \`${{ vars.STACK_NAME }}\` to \`${{ inputs.environment }}\`"
+            echo
+            echo "- Image: \`$(cat image-uri.txt)\`"
+            echo "- Commit: \`${{ github.sha }}\`"
+            echo
+            echo "Stack outputs:"
+            echo '```'
+            aws cloudformation describe-stacks --stack-name "${{ vars.STACK_NAME }}" \
+              --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output text
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

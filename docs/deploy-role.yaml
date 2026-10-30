@@ -1,0 +1,200 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Deploy role for phebee-extraction-aws's GitHub Actions workflow (.github/workflows/deploy.yml).
+  Deployed once per target account, by hand, before the first run of the workflow. The role
+  trusts GitHub's OIDC provider for one repository and one GitHub environment, so only a run of
+  that environment in that repository can assume it. No AWS keys are stored in GitHub.
+
+Parameters:
+  GitHubRepository:
+    Type: String
+    Description: owner/name of the repository that may deploy, e.g. nch-cloud/phebee-extraction-aws
+    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+  GitHubEnvironment:
+    Type: String
+    Description: The GitHub environment whose runs may assume this role, e.g. dev or prod. One role per environment.
+    AllowedPattern: "^[A-Za-z0-9_.-]+$"
+  AppName:
+    Type: String
+    Default: phebee-extraction
+    Description: Same AppName the stack is deployed with; scopes what the role may create.
+  StackName:
+    Type: String
+    Default: phebee-extraction-aws
+    Description: Name of the application stack the workflow deploys.
+  UtilityEcrRepositoryName:
+    Type: String
+    Default: phebee-extraction-aws
+    Description: ECR repository the workflow pushes the utility image to (must already exist).
+  CreateOidcProvider:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Create the GitHub OIDC identity provider. An account has at most one; set true only if
+      no other workflow in this account already deploys from GitHub Actions.
+
+Conditions:
+  ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateOidcProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      # GitHub's root CA thumbprint. AWS now verifies GitHub's certificate itself, so this
+      # value is retained for compatibility rather than relied on.
+      ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-deploy-${GitHubEnvironment}"
+      Description: !Sub "Assumed by GitHub Actions deploy runs of ${GitHubRepository}, environment ${GitHubEnvironment}"
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub "arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com"
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                # Only a run targeting this environment, in this repository. A fork, another
+                # repository, a pull request, or a run against another environment presents a
+                # different `sub` and is refused.
+                token.actions.githubusercontent.com:sub: !Sub "repo:${GitHubRepository}:environment:${GitHubEnvironment}"
+      Policies:
+        - PolicyName: PushUtilityImage
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:CompleteLayerUpload
+                  - ecr:InitiateLayerUpload
+                  - ecr:PutImage
+                  - ecr:UploadLayerPart
+                  - ecr:BatchGetImage
+                  - ecr:DescribeImages
+                Resource: !Sub "arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${UtilityEcrRepositoryName}"
+
+        - PolicyName: DeployStack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CloudFormation on this stack only
+              - Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:GetTemplateSummary
+                  - cloudformation:CreateChangeSet
+                  - cloudformation:DescribeChangeSet
+                  - cloudformation:ExecuteChangeSet
+                  - cloudformation:DeleteChangeSet
+                  - cloudformation:ListStackResources
+                Resource:
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${StackName}/*"
+                  - !Sub "arn:aws:cloudformation:${AWS::Region}:aws:transform/Serverless-2016-10-31"
+              - Effect: Allow
+                Action: cloudformation:ListStacks
+                Resource: "*"
+              # The SAM CLI's managed artifact bucket (--resolve-s3)
+              - Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:PutBucketVersioning
+                  - s3:PutEncryptionConfiguration
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetEncryptionConfiguration
+                Resource:
+                  - "arn:aws:s3:::aws-sam-cli-managed-default*"
+                  - "arn:aws:s3:::aws-sam-cli-managed-default*/*"
+
+        - PolicyName: ManageStackResources
+          # What CloudFormation creates on the role's behalf, scoped to this application's names
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub "arn:aws:s3:::${AppName}-${AWS::AccountId}-${AWS::Region}"
+                  - !Sub "arn:aws:s3:::${AppName}-${AWS::AccountId}-${AWS::Region}/*"
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:DescribeLogGroups
+                  - logs:TagLogGroup
+                  - logs:ListTagsForResource
+                  - logs:TagResource
+                  - logs:UntagResource
+                Resource:
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/batch/${AppName}*"
+                  - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/states/${AppName}-*"
+              - Effect: Allow
+                Action:
+                  - batch:RegisterJobDefinition
+                  - batch:DeregisterJobDefinition
+                  - batch:DescribeJobDefinitions
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - states:CreateStateMachine
+                  - states:UpdateStateMachine
+                  - states:DeleteStateMachine
+                  - states:DescribeStateMachine
+                  - states:TagResource
+                  - states:UntagResource
+                  - states:ListTagsForResource
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AppName}-*"
+              # The stack's own IAM roles. Scoped to the application's role names so this deploy
+              # role cannot create arbitrary roles.
+              - Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${AppName}-*"
+
+Outputs:
+  DeployRoleArn:
+    Description: Set this as the AWS_DEPLOY_ROLE_ARN variable of the GitHub environment.
+    Value: !GetAtt DeployRole.Arn
+  TrustedSubject:
+    Description: The exact OIDC subject this role trusts.
+    Value: !Sub "repo:${GitHubRepository}:environment:${GitHubEnvironment}"
