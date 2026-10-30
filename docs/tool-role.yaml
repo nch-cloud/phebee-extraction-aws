@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  A job role for extraction tools that need AWS permissions beyond reading and writing their
+  batch files. One role per permission set, not per tool: every tool that calls Bedrock through
+  bedrock-runtime can share one "bedrock" role. The name follows the {AppName}-tool-{RoleName}
+  convention the application stack allows the plan job to pass, so the shared default role
+  never accumulates tool-specific permissions. Reference it from a stage as
+  "job_role": "{RoleName}".
+
+Parameters:
+  AppName:
+    Type: String
+    Default: phebee-extraction
+    Description: Same AppName the application stack is deployed with.
+  RoleName:
+    Type: String
+    Default: bedrock
+    AllowedPattern: "^[a-z][a-z0-9-]{1,40}$"
+    Description: Short name for the permission set, e.g. bedrock. The role is {AppName}-tool-{RoleName}.
+  DataBucketName:
+    Type: String
+    Description: The application stack's data bucket (its DataBucketName output).
+  BedrockModelArns:
+    Type: String
+    Default: ""
+    Description: >
+      Optional, the common case. Comma-separated ARNs of the Bedrock foundation models and/or
+      inference profiles the tools may invoke, e.g.
+      arn:aws:bedrock:us-east-2::foundation-model/anthropic.claude-3-haiku-20240307-v1:0,
+      arn:aws:bedrock:us-east-2:123456789012:inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0.
+      Grants bedrock:InvokeModel and bedrock:InvokeModelWithResponseStream on them.
+  ManagedPolicyArns:
+    Type: String
+    Default: ""
+    Description: >
+      Optional. Comma-separated ARNs of managed policies with any other permissions the tools
+      need (for example the bedrock-mantle actions RagTag uses). Create them to suit the tool.
+
+Conditions:
+  HasBedrockModels: !Not [!Equals [!Ref BedrockModelArns, ""]]
+  HasManagedPolicies: !Not [!Equals [!Ref ManagedPolicyArns, ""]]
+
+Resources:
+  ToolRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-tool-${RoleName}"
+      Description: !Sub "Job role for ${AppName} extraction tools needing the ${RoleName} permissions"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns: !If
+        - HasManagedPolicies
+        - !Split [",", !Ref ManagedPolicyArns]
+        - !Ref AWS::NoValue
+      Policies:
+        # Identical to the default ToolJobRole: the tool reads its stage input and writes its
+        # stage output under a run's batches/ prefix, nothing else in the bucket.
+        - PolicyName: BatchFilesReadWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "arn:aws:s3:::${DataBucketName}/*/batches/*"
+        - !If
+          - HasBedrockModels
+          - PolicyName: InvokeBedrockModels
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action: [bedrock:InvokeModel, bedrock:InvokeModelWithResponseStream]
+                  Resource: !Split [",", !Ref BedrockModelArns]
+          - !Ref AWS::NoValue
+
+Outputs:
+  ToolRoleArn:
+    Description: The role's ARN. Stages can refer to it by short name instead ("job_role").
+    Value: !GetAtt ToolRole.Arn
+  JobRole:
+    Description: Set this as "job_role" on any stage that should run as this role.
+    Value: !Ref RoleName

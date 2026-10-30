@@ -1,0 +1,26 @@
+# Copy to samconfig.yaml (git-ignored) and fill in the values for your account.
+# Tool images are not deployment parameters: name them in each execution's input.
+version: 0.1
+
+default:
+  global:
+    parameters:
+      stack_name: phebee-extraction-aws
+      region: us-east-2
+  build:
+    parameters:
+      cached: true
+  deploy:
+    parameters:
+      capabilities: CAPABILITY_IAM CAPABILITY_NAMED_IAM
+      confirm_changeset: true
+      resolve_s3: true
+      parameter_overrides:
+        - AppName=phebee-extraction
+        # Optional: an existing bucket for the data bucket's access logs. Required where
+        # CloudFormation guardrails (CIS) demand S3 access logging; omit otherwise.
+        - S3AccessLogBucketName=my-s3-access-logs-123456789012-us-east-2
+        - CPUJobQueueArn=arn:aws:batch:us-east-2:123456789012:job-queue/cpu-queue
+        # Omit this line entirely if you have no GPU queue; SAM rejects an empty value.
+        - GPUJobQueueArn=arn:aws:batch:us-east-2:123456789012:job-queue/gpu-queue
+        - UtilityImageUri=123456789012.dkr.ecr.us-east-2.amazonaws.com/phebee-extraction-aws:v0.1.0

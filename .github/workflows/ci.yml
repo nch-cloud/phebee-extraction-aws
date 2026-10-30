@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The core (phebee-extraction) is installed from its git tag. While that repository is still
+# private, cloning it needs a token with read access (a fine-grained PAT or GitHub App token,
+# stored as the CORE_REPO_TOKEN secret; the default GITHUB_TOKEN cannot read other repos).
+# Once the core is public the secret can simply be deleted: the step below is skipped when it
+# is unset and the clone is anonymous.
+env:
+  CORE_REPO_TOKEN: ${{ secrets.CORE_REPO_TOKEN }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - name: Allow uv to clone the core repo (only needed while it is private)
+        if: env.CORE_REPO_TOKEN != ''
+        run: git config --global url."https://x-access-token:${CORE_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - run: uv sync
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python-version }}
+      - name: Allow uv to clone the core repo (only needed while it is private)
+        if: env.CORE_REPO_TOKEN != ''
+        run: git config --global url."https://x-access-token:${CORE_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
+      - run: uv sync
+      - run: uv run pytest
+
+  template:
+    # cfn-lint on the SAM template; needs no AWS credentials
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - run: sam validate --lint

@@ -1,0 +1,345 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  phebee-extraction-aws: Step Functions + AWS Batch deployment of phebee-extraction.
+  Plans a run (splits notes into batches on S3), runs the extraction containers per batch
+  in order, and writes PheBee import-ready part files. Slim alternative to
+  phebee-extraction-pipeline; reuses existing Batch job queues. Tool images are named at
+  run time and their job definitions registered on first use, so no redeploy per tool.
+
+# ---------------------------------------------------------------------------------------------
+Parameters:
+  AppName:
+    Type: String
+    Default: phebee-extraction
+    AllowedPattern: "^[a-z][a-z0-9-]{2,40}$"
+    Description: Prefix for resource names, including the job definitions registered at run time.
+
+  CPUJobQueueArn:
+    Type: String
+    Description: ARN of an existing AWS Batch job queue for CPU jobs (plan, transform, CPU tools).
+  GPUJobQueueArn:
+    Type: String
+    Default: ""
+    Description: Optional. ARN of an existing AWS Batch job queue for stages that set gpu to true.
+
+  UtilityImageUri:
+    Type: String
+    Description: ECR image URI of the utility image built by scripts/build_image.sh (runs plan and transform).
+  UtilityVcpus:
+    Type: Number
+    Default: 1
+  UtilityMemoryMiB:
+    Type: Number
+    Default: 4096
+    Description: plan loads the whole input into memory; raise for very large inputs.
+
+  # Defaults for the job definitions registered for tool images. A stage can override
+  # vcpus / memory_mib in the execution input.
+  ToolVcpus:
+    Type: Number
+    Default: 2
+  ToolMemoryMiB:
+    Type: Number
+    Default: 8192
+  GpuToolVcpus:
+    Type: Number
+    Default: 4
+  GpuToolMemoryMiB:
+    Type: Number
+    Default: 16384
+  JobTimeoutSeconds:
+    Type: Number
+    Default: 3600
+    Description: Maximum duration of one Batch job attempt (utility and tool jobs).
+
+  MaxConcurrency:
+    Type: Number
+    Default: 10
+    Description: Batches processed in parallel (Distributed Map concurrency).
+  ToleratedFailurePercentage:
+    Type: Number
+    Default: 0
+    Description: Percentage of batches that may fail before the run is marked failed.
+  LogRetentionDays:
+    Type: Number
+    Default: 365
+    Description: >
+      Retention for the Batch and Step Functions log groups. Compliance guardrails (HIPAA,
+      NIST 800-53) commonly require at least 365 days.
+
+  S3AccessLogBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional. An existing bucket to receive the data bucket's server access logs.
+      Organisations whose CloudFormation guardrails require S3 access logging (CIS) must set
+      this; the stack is rejected without it.
+  S3AccessLogPrefix:
+    Type: String
+    Default: phebee-extraction-access-logs/
+    Description: Prefix for the access logs in that bucket.
+
+Conditions:
+  HasGpuQueue: !Not [!Equals [!Ref GPUJobQueueArn, ""]]
+  ShouldEnableS3Logging: !Not [!Equals [!Ref S3AccessLogBucketName, ""]]
+
+# ---------------------------------------------------------------------------------------------
+Resources:
+  # ---- Storage and logs -------------------------------------------------------------------
+  DataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub "${AppName}-${AWS::AccountId}-${AWS::Region}"
+      LoggingConfiguration: !If
+        - ShouldEnableS3Logging
+        - DestinationBucketName: !Ref S3AccessLogBucketName
+          LogFilePrefix: !Ref S3AccessLogPrefix
+        - !Ref AWS::NoValue
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  JobLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/batch/${AppName}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  StateMachineLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/vendedlogs/states/${AppName}-extraction"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # ---- IAM for Batch jobs -----------------------------------------------------------------
+  BatchExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-batch-execution"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ToolJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-tool-job"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: BatchFilesReadWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Tools read their stage input and write their stage output under a run's batches/
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DataBucket.Arn}/*/batches/*"
+
+  UtilityJobRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-utility-job"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DataBucketReadWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DataBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+        - PolicyName: ResolveImageDigests
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ecr:DescribeImages
+                Resource: "*"
+        - PolicyName: RegisterToolJobDefinitions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: batch:RegisterJobDefinition
+                Resource: !Sub "arn:aws:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${AppName}-*"
+              - Effect: Allow
+                Action: batch:DescribeJobDefinitions
+                Resource: "*"
+              # Registering a definition that uses a role requires passing it. A stage may
+              # name its own job role (job_role_arn) for tools that need more than S3; it has
+              # to be named ${AppName}-tool-*, so extra permissions always live in a role
+              # created for that tool (docs/tool-role.yaml), never in the shared default.
+              - Effect: Allow
+                Action: iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AppName}-tool-*"
+                  - !GetAtt BatchExecutionRole.Arn
+
+  # ---- The utility job definition (plan and transform) ------------------------------------
+  UtilityJobDefinition:
+    Type: AWS::Batch::JobDefinition
+    Properties:
+      JobDefinitionName: !Sub "${AppName}-utility"
+      Type: container
+      PlatformCapabilities: [EC2]
+      RetryStrategy: { Attempts: 2 }
+      Timeout: { AttemptDurationSeconds: !Ref JobTimeoutSeconds }
+      ContainerProperties:
+        Image: !Ref UtilityImageUri
+        JobRoleArn: !GetAtt UtilityJobRole.Arn
+        ExecutionRoleArn: !GetAtt BatchExecutionRole.Arn
+        ResourceRequirements:
+          - { Type: VCPU, Value: !Sub "${UtilityVcpus}" }
+          - { Type: MEMORY, Value: !Sub "${UtilityMemoryMiB}" }
+        Environment:
+          # Batch on EC2 sets no region in the container; boto3 needs one for regional services
+          - Name: AWS_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          # Everything the plan job needs to register tool job definitions (batch.Deployment)
+          - Name: PHEBEE_DEPLOYMENT
+            # Folded scalar: lines at equal indent join with spaces, giving one-line JSON.
+            Value: !Sub >-
+              {"app_name": "${AppName}",
+              "account_id": "${AWS::AccountId}",
+              "region": "${AWS::Region}",
+              "partition": "${AWS::Partition}",
+              "cpu_job_queue_arn": "${CPUJobQueueArn}",
+              "gpu_job_queue_arn": "${GPUJobQueueArn}",
+              "tool_job_role_arn": "${ToolJobRole.Arn}",
+              "execution_role_arn": "${BatchExecutionRole.Arn}",
+              "log_group": "${JobLogGroup}",
+              "tool_vcpus": "${ToolVcpus}",
+              "tool_memory_mib": "${ToolMemoryMiB}",
+              "gpu_tool_vcpus": "${GpuToolVcpus}",
+              "gpu_tool_memory_mib": "${GpuToolMemoryMiB}",
+              "job_timeout_seconds": "${JobTimeoutSeconds}"}
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group: !Ref JobLogGroup
+            awslogs-region: !Ref AWS::Region
+            awslogs-stream-prefix: utility
+
+  # ---- Step Functions ---------------------------------------------------------------------
+  StateMachineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${AppName}-extraction-statemachine"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: states.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: SubmitBatchJobs
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [batch:SubmitJob, batch:DescribeJobs, batch:TerminateJob]
+                Resource: "*"
+              # Required by the .sync Batch integration
+              - Effect: Allow
+                Action: [events:PutTargets, events:PutRule, events:DescribeRule]
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/StepFunctionsGetEventsForBatchJobsRule"
+        - PolicyName: ReadPlanWriteResults
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub "${DataBucket.Arn}/*"
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !GetAtt DataBucket.Arn
+        - PolicyName: DistributedMapChildExecutions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: states:StartExecution
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:${AppName}-extraction"
+              - Effect: Allow
+                Action: [states:DescribeExecution, states:StopExecution, states:RedriveExecution]
+                Resource: !Sub "arn:aws:states:${AWS::Region}:${AWS::AccountId}:execution:${AppName}-extraction/*"
+        - PolicyName: Logging
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
+  ExtractionStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub "${AppName}-extraction"
+      Type: STANDARD
+      Role: !GetAtt StateMachineRole.Arn
+      DefinitionUri: statemachine/extraction.asl.json
+      DefinitionSubstitutions:
+        UtilityJobDefinitionArn: !Ref UtilityJobDefinition
+        CPUJobQueueArn: !Ref CPUJobQueueArn
+        MaxConcurrency: !Ref MaxConcurrency
+        ToleratedFailurePercentage: !Ref ToleratedFailurePercentage
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt StateMachineLogGroup.Arn
+
+# ---------------------------------------------------------------------------------------------
+Outputs:
+  StateMachineArn:
+    Description: Start executions of this state machine to run extractions.
+    Value: !Ref ExtractionStateMachine
+  DataBucketName:
+    Description: Put inputs here and read outputs from here.
+    Value: !Ref DataBucket
+  UtilityJobDefinitionArn:
+    Value: !Ref UtilityJobDefinition
+  CPUJobQueueArn:
+    Value: !Ref CPUJobQueueArn
+  GPUJobQueueArn:
+    Condition: HasGpuQueue
+    Value: !Ref GPUJobQueueArn
+  ToolJobDefinitionPrefix:
+    Description: Job definitions registered at run time for tool images are named with this prefix.
+    Value: !Sub "${AppName}-"
