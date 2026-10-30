@@ -16,6 +16,9 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The deploy workflow tags the utility image with `git describe` (the release tag when deploying
+  one) and the commit SHA; `scripts/build_image.sh --also-tag` pushes extra tags.
+
 - Initial scaffold: `plan` and `transform` jobs built on `phebee-extraction` v1.0.0, a Step
   Functions definition that iterates the plan and submits Batch jobs, a SAM template, the
   utility image, and tests that run without AWS.

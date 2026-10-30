@@ -67,7 +67,12 @@ scripts/build_image.sh --push 123456789012.dkr.ecr.us-east-2.amazonaws.com/phebe
 ```
 
 The script builds both wheels on your machine and copies them into the image, so the Docker
-build is reproducible from pinned wheels and makes no network requests to GitHub.
+build is reproducible from pinned wheels and makes no network requests to GitHub. The image is
+tagged from `git describe` (the release tag when you are on one, otherwise e.g.
+`v0.1.0-5-gabc1234`), and `--also-tag` adds more; the stack is always pointed at the digest,
+so tags are labels for humans. Consider creating the ECR repository with
+`--image-tag-mutability IMMUTABLE` so a tag can never be moved to a different build; note that
+this makes re-pushing a rebuilt image under an existing tag fail, which is the point.
 
 **Architecture.** The image is built for `linux/arm64` by default (Graviton); set
 `PLATFORM=linux/amd64` for an x86 queue. It must match the compute environment behind
@@ -97,8 +102,8 @@ guardrails, both can be left alone.
 
 The deployment contract is two steps, and any CI system can run them:
 
-1. Build and push the utility image, tagged immutably (the commit SHA is a good tag), and
-   capture its URI. `scripts/build_image.sh --push <repo> --output image-uri.txt` does this
+1. Build and push the utility image and capture its URI. The workflow tags it with
+   `git describe` and the commit SHA; any immutable scheme works. `scripts/build_image.sh --push <repo> --output image-uri.txt` does this
    and writes the digest-pinned URI to the file.
 2. `sam build && sam deploy` with the stack parameters, passing that URI as `UtilityImageUri`.
 
@@ -281,6 +286,11 @@ read it (and derives its own `batch_id` from the file name), so part files need 
   whole run, or re-run a single batch by submitting its stages by hand from `plan/batches.json`.
 
 ## Development
+
+To iterate against a stack of your own, the loop is: build and push the image
+(`scripts/build_image.sh --push <repo> --output image-uri.txt`), set `UtilityImageUri` in your
+`samconfig.yaml` to the file's contents, and `sam build && sam deploy`. Only changes under
+`src/`, `pyproject.toml`, `uv.lock` or `docker/` need a new image.
 
 ```bash
 uv sync

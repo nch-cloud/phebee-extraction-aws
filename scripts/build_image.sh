@@ -5,6 +5,8 @@
 #   scripts/build_image.sh --push REPO_URI                  also push to an ECR repository
 #   scripts/build_image.sh --push REPO_URI --output FILE    and write the pushed image URI,
 #                                                           pinned by digest, to FILE
+#   scripts/build_image.sh --push REPO_URI --also-tag TAG   push the same image under extra
+#                                                           tag(s) too, e.g. the commit SHA
 #
 # IMAGE_TAG sets the tag (default: `git describe`, or the commit SHA in CI). The URI written
 # to --output is what a deploy step passes as the UtilityImageUri stack parameter.
@@ -20,11 +22,13 @@ cd "$(dirname "$0")/.."
 
 PUSH_REPO=""
 OUTPUT=""
+ALSO_TAGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --push) PUSH_REPO="${2:?--push needs an ECR repository URI}"; shift 2 ;;
     --output) OUTPUT="${2:?--output needs a file path}"; shift 2 ;;
-    -h|--help) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --also-tag) ALSO_TAGS+=("${2:?--also-tag needs a tag}"); shift 2 ;;
+    -h|--help) sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -52,6 +56,9 @@ if [[ -n "$PUSH_REPO" ]]; then
   aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY"
   docker tag "${LOCAL_IMAGE}" "${PUSH_REPO}:${TAG}"
   docker push "${PUSH_REPO}:${TAG}"
+  for extra in "${ALSO_TAGS[@]}"; do
+    docker tag "${LOCAL_IMAGE}" "${PUSH_REPO}:${extra}" && docker push "${PUSH_REPO}:${extra}"
+  done
   # The digest reference is immutable even if the tag is later moved; deploy with this.
   RESULT="$(docker inspect --format='{{index .RepoDigests 0}}' "${PUSH_REPO}:${TAG}")"
   echo "Pushed ${PUSH_REPO}:${TAG}"

@@ -38,6 +38,8 @@ jobs:
     environment: ${{ inputs.environment }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so `git describe` can name the build
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -53,11 +55,16 @@ jobs:
 
 
       - name: Build and push the utility image
-        # Tagged with the commit SHA: immutable, and "what is deployed?" is answered by the tag.
+        # Two tags for the same image: a readable one from `git describe` (exactly the release
+        # tag when deploying a tag, e.g. v0.2.0; otherwise v0.1.0-5-gabc1234, "five commits past
+        # v0.1.0") and the full commit SHA for exact traceability. The stack is pointed at the
+        # digest, so tags are labels for humans.
         env:
-          IMAGE_TAG: ${{ github.sha }}
           PLATFORM: ${{ vars.PLATFORM || 'linux/arm64' }}
-        run: scripts/build_image.sh --push "${{ vars.UTILITY_ECR_REPOSITORY }}" --output image-uri.txt
+        run: |
+          export IMAGE_TAG="$(git describe --tags --always)"
+          scripts/build_image.sh --push "${{ vars.UTILITY_ECR_REPOSITORY }}" \
+            --also-tag "${{ github.sha }}" --output image-uri.txt
 
       - name: Deploy the stack
         env:
