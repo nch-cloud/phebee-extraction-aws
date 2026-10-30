@@ -1,18 +1,24 @@
 # Deploy to an AWS account: build and push the utility image, then `sam deploy`.
 #
-# Manual trigger only. It never runs on pushes or pull requests, so it is safe to keep in a
-# fork or a public repo; nothing happens until someone with access to the chosen environment
-# runs it. It is also the reference for plugging this repo into another deployment system:
-# the whole contract is the two steps "build and push the image" and "sam deploy with these
-# parameters".
+# Two ways to run it, both by hand; it never runs on pushes or pull requests:
 #
-# Configure a GitHub environment (e.g. `dev`, `prod`) with:
+#   workflow_dispatch  from this repository's Actions tab, against one of its environments.
+#   workflow_call      from a workflow in another (private) repository, which supplies the
+#                      environment. The run, its logs and its summary then live in that
+#                      repository, so account IDs, ARNs and bucket names never appear in
+#                      this repository's public logs. docs/deploy-caller.yml is the caller.
+#
+# Either way the GitHub environment (e.g. `dev`, `prod`) belongs to the repository the run
+# starts in, and holds:
 #   variables  AWS_REGION, AWS_DEPLOY_ROLE_ARN, UTILITY_ECR_REPOSITORY, STACK_NAME, APP_NAME,
 #              CPU_JOB_QUEUE_ARN, GPU_JOB_QUEUE_ARN (may be empty),
 #              PLATFORM (linux/arm64 or linux/amd64; must match the CPU queue's instances),
 #              S3_ACCESS_LOG_BUCKET (optional; required where guardrails demand S3 access logging)
-# AWS_DEPLOY_ROLE_ARN is a role that trusts GitHub's OIDC provider for this repository and
+# AWS_DEPLOY_ROLE_ARN is a role that trusts GitHub's OIDC provider for that repository and
 # can push to the ECR repository and run CloudFormation for the stack. No AWS keys are stored.
+#
+# This is also the reference for plugging this repo into another deployment system: the whole
+# contract is the two steps "build and push the image" and "sam deploy with these parameters".
 
 name: Deploy
 
@@ -23,22 +29,33 @@ on:
         description: GitHub environment holding the target account's settings
         type: environment
         required: true
+  workflow_call:
+    inputs:
+      environment:
+        description: GitHub environment (in the calling repository) holding the target account's settings
+        type: string
+        required: true
 
 permissions:
   id-token: write # OIDC token for assuming the AWS role
   contents: read
 
-concurrency:
-  group: deploy-${{ inputs.environment }}
-  cancel-in-progress: false
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-${{ inputs.environment }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
         with:
+          # When called from another repository, the github context (and so checkout's
+          # defaults) is the *caller's*. The job context names the repository and commit of
+          # the workflow file itself, whether called or dispatched here, so this always
+          # builds this repository at this commit. (job.workflow_* is github.com only.)
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
           fetch-depth: 0 # full history, so `git describe` can name the build
 
       - uses: aws-actions/configure-aws-credentials@v4
@@ -53,7 +70,6 @@ jobs:
         with:
           use-installer: true
 
-
       - name: Build and push the utility image
         # Two tags for the same image: a readable one from `git describe` (exactly the release
         # tag when deploying a tag, e.g. v0.2.0; otherwise v0.1.0-5-gabc1234, "five commits past
@@ -64,7 +80,7 @@ jobs:
         run: |
           export IMAGE_TAG="$(git describe --tags --always)"
           scripts/build_image.sh --push "${{ vars.UTILITY_ECR_REPOSITORY }}" \
-            --also-tag "${{ github.sha }}" --output image-uri.txt
+            --also-tag "$(git rev-parse HEAD)" --output image-uri.txt
 
       - name: Deploy the stack
         env:
@@ -93,7 +109,7 @@ jobs:
             echo "### Deployed \`${{ vars.STACK_NAME }}\` to \`${{ inputs.environment }}\`"
             echo
             echo "- Image: \`$(cat image-uri.txt)\`"
-            echo "- Commit: \`${{ github.sha }}\`"
+            echo "- Commit: \`$(git rev-parse HEAD)\` ($(git describe --tags --always))"
             echo
             echo "Stack outputs:"
             echo '```'

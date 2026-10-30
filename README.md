@@ -121,8 +121,20 @@ GitHub. To use it, create an environment (for example `dev`) with these variable
 | `CPU_JOB_QUEUE_ARN`, `GPU_JOB_QUEUE_ARN` | Existing Batch queues (`GPU_JOB_QUEUE_ARN` may be empty) |
 | `PLATFORM` | `linux/arm64` or `linux/amd64`, matching the CPU queue's instances (default `linux/arm64`) |
 | `S3_ACCESS_LOG_BUCKET` | Optional. Existing bucket for the data bucket's access logs; required where guardrails demand S3 access logging |
-. Other systems (CodePipeline,
-Jenkins, GitLab CI) map onto the same two steps; the workflow file shows the exact commands.
+
+Other systems (CodePipeline, Jenkins, GitLab CI) map onto the same two steps; the workflow
+file shows the exact commands.
+
+**Keeping account details out of public logs.** Variables are printed in Actions logs, and
+the logs of a public repository are public. Account IDs, ARNs and bucket names grant nothing
+on their own, but if your organisation would rather not publish them, run the deployment
+from a private repository instead: the workflow is reusable (`workflow_call`), and
+[`docs/deploy-caller.yml`](docs/deploy-caller.yml) is a complete caller. Copy it into a
+private repository, create the environments and their variables there, and pin `uses:` to
+the release tag to deploy. The run and its logs then belong to the private repository, and
+this one holds only code. The deploy role's `GitHubRepository` must then name the private
+repository: the OIDC subject is the repository a run starts in, not the one that owns the
+workflow file.
 
 **The AWS side: the deploy role.** The workflow gets credentials by assuming an IAM role
 through GitHub's OIDC provider, so no AWS keys are stored. [`docs/deploy-role.yaml`](docs/deploy-role.yaml)
@@ -137,11 +149,12 @@ aws cloudformation describe-stacks --stack-name phebee-extraction-deploy-role-de
   --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue" --output text
 ```
 
-Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. The role's trust policy
-accepts only tokens whose subject is `repo:<repository>:environment:<environment>`, so a fork,
-another repository, a pull request, or a run against a different environment cannot assume it;
-a `prod` role is only reachable through the `prod` environment and whatever reviewer rules you
-put on it. Its permissions are limited to pushing the utility image and deploying this one
+Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. `GitHubRepository` is the
+repository whose Actions runs deploy: this one, or the private caller described above. The
+role's trust policy accepts only tokens whose subject is
+`repo:<repository>:environment:<environment>`, so a fork, another repository, a pull request,
+or a run against a different environment cannot assume it; a `prod` role is only reachable
+through the `prod` environment and whatever reviewer rules you put on it. Its permissions are limited to pushing the utility image and deploying this one
 stack and the resources it declares, under this application's names. The role is public-safe
 by design: the repository can be public and the role stays usable only from your copy of it.
 
@@ -306,13 +319,14 @@ src/phebee_extraction_aws/
   s3.py           S3Uri and the three S3 operations the jobs need
   ecr.py          image URI parsing; digest lookup via describe-images
   batch.py        Deployment settings; register-or-reuse job definitions for tool images
-docs/deploy-role.yaml              the OIDC deploy role for the GitHub Actions workflow
-docs/tool-role.yaml                a job role for a tool needing permissions beyond S3
   plan.py         the plan job: split on S3, resolve stages, write the per-batch plan
   transform.py    the transform job: one batch's tool output -> one part file
   cli.py          phebee-extract-aws plan | transform
 statemachine/extraction.asl.json   the Step Functions definition
 template.yaml                      SAM: bucket, roles, utility job definition, state machine
+docs/deploy-role.yaml              the OIDC deploy role for the GitHub Actions workflow
+docs/deploy-caller.yml             runs the deploy workflow from a private repository
+docs/tool-role.yaml                a job role for a tool needing permissions beyond S3
 docker/Dockerfile, scripts/build_image.sh   the utility image
 tests/                             fakes for S3/ECR/Batch; plan -> transform end to end;
                                    ASL <-> template consistency
