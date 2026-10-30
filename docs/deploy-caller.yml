@@ -1,0 +1,41 @@
+# Deploy phebee-extraction-aws from a private repository.
+#
+# The public repository's deploy workflow is reusable. Calling it from here means the run, its
+# logs and its summary belong to this repository, so the account ID, role and queue ARNs and
+# bucket names in the environment's variables never appear in public Actions logs. The public
+# repository holds only code.
+#
+# To use it:
+#   1. Copy this file to .github/workflows/deploy.yml in a private repository.
+#   2. Create the GitHub environments there (dev, prod, ...) with the variables the
+#      phebee-extraction-aws README lists, exactly as you would in the public repository.
+#   3. Deploy docs/deploy-role.yaml with GitHubRepository set to THIS repository (owner/name):
+#      the OIDC subject is always the repository the run starts in, not the one that owns the
+#      reusable workflow.
+#   4. Pin `uses:` below to the release tag you want to deploy. The image is built from that
+#      tag, so the stack and its provenance follow it.
+#
+# If your organisation restricts which actions and reusable workflows may run, allow
+# `nch-cloud/phebee-extraction-aws/.github/workflows/deploy.yml@*` (same-organisation
+# repositories are usually allowed already).
+
+name: Deploy phebee-extraction
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: GitHub environment holding the target account's settings
+        type: environment
+        required: true
+
+# A reusable workflow cannot grant itself more than the caller does; it needs these two.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    uses: nch-cloud/phebee-extraction-aws/.github/workflows/deploy.yml@v0.1.0
+    with:
+      environment: ${{ inputs.environment }}

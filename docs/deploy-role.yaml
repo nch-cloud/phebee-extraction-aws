@@ -8,7 +8,10 @@ Description: >
 Parameters:
   GitHubRepository:
     Type: String
-    Description: owner/name of the repository that may deploy, e.g. nch-cloud/phebee-extraction-aws
+    Description: >
+      owner/name of the repository whose Actions runs may deploy, e.g. nch-cloud/phebee-extraction-aws.
+      If the deploy workflow is called from a private repository (docs/deploy-caller.yml), name that
+      repository: the OIDC subject is the repository a run starts in.
     AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
   GitHubEnvironment:
     Type: String
