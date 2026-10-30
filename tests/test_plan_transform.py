@@ -195,13 +195,8 @@ def test_plan_items_chain_stage_uris_and_carry_everything_the_jobs_need(tmp_path
     assert t["original_input_uri"] == s1["input_uri"]
     assert t["part_uri"] == "s3://data/runs/r1/jsonl/part-batch_000002.json"
     assert t["image_refs"] == plan["image_refs"]
-    assert (t["project_id"], t["subject_id_column"], t["phebee_batch_id"]) == (
-        "proj",
-        "subject_id",
-        0,
-    )
-    # second batch's row numbers start after the first batch's reserved block
-    assert t["start_row_num"] == 1 + 2 * 1000
+    assert (t["project_id"], t["subject_id_column"]) == ("proj", "subject_id")
+    assert "start_row_num" not in t and "phebee_batch_id" not in t  # PheBee reads neither
 
 
 def test_stage_environment_has_both_uri_name_pairs_then_the_tools_own_variables(tmp_path, clients):
@@ -369,34 +364,18 @@ def test_transform_produces_an_import_ready_part_file(tmp_path, clients):
     assert ev["contexts"] == {"negated": False, "family": False, "hypothetical": False}
 
 
-def test_transform_row_numbers_do_not_collide_across_batches(tmp_path, clients):
+def test_each_part_file_numbers_its_rows_from_one(tmp_path, clients):
+    """row_num is a per-file line number (PheBee does not read it), so no cross-part offsets"""
     s3c, ecr, batch = clients
     plan = run_plan(clients, tmp_path)
     for item in plan["items"]:
         pretend_tool_run(s3c, item)
-    results = [
-        transform_batch(item, str(tmp_path / item["batch_id"]), S3(s3c)) for item in plan["items"]
-    ]
+        transform_batch(item, str(tmp_path / item["batch_id"]), S3(s3c))
 
-    row_nums = []
     for item in plan["items"]:
         body = s3c.objects[("data", item["transform"]["part_uri"][len("s3://data/") :])].decode()
-        row_nums += [json.loads(line)["row_num"] for line in body.splitlines()]
-    assert len(row_nums) == len(set(row_nums)) == sum(r["records_written"] for r in results)
-    assert min(row_nums) == 1
-
-
-def test_transform_refuses_to_overflow_its_row_number_block(tmp_path, clients):
-    s3c, ecr, batch = clients
-    plan = run_plan(clients, tmp_path, row_num_stride=1)
-    item = plan["items"][0]  # 2 notes, stride 1 -> 2 reserved; the batch yields 3 records
-    pretend_tool_run(s3c, item)
-
-    with pytest.raises(ValueError, match="row numbers reserved"):
-        transform_batch(item, str(tmp_path / "t"), S3(s3c))
-
-
-# ---------------------------------------------------------------------------- cli
+        row_nums = [json.loads(line)["row_num"] for line in body.splitlines()]
+        assert row_nums == list(range(1, len(row_nums) + 1))
 
 
 def test_cli_plan_and_transform_via_env_vars(tmp_path, clients, monkeypatch, capsys):

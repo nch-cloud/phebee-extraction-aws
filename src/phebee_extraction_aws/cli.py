@@ -14,7 +14,7 @@ import logging
 import os
 import sys
 import tempfile
-from typing import Any, Optional
+from typing import Any
 
 from phebee_extraction_aws.batch import Deployment
 from phebee_extraction_aws.plan import RunConfig, plan_run
@@ -27,7 +27,7 @@ RUN_CONFIG_ENV = "PHEBEE_RUN_CONFIG"
 BATCH_ITEM_ENV = "PHEBEE_BATCH_ITEM"
 
 
-def _load_json_arg(parser: argparse.ArgumentParser, value: Optional[str], env_var: str, what: str):
+def _load_json_arg(parser: argparse.ArgumentParser, value: str | None, env_var: str, what: str):
     raw = value if value is not None else os.environ.get(env_var)
     if not raw:
         parser.error(f"{what} is required: pass it as an argument or set {env_var}")
@@ -65,11 +65,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(
-    argv: Optional[list[str]] = None,
-    s3: Optional[S3] = None,
-    ecr_client: Optional[Any] = None,
-    batch_client: Optional[Any] = None,
-    deployment: Optional[Deployment] = None,
+    argv: list[str] | None = None,
+    s3: S3 | None = None,
+    ecr_client: Any | None = None,
+    batch_client: Any | None = None,
+    deployment: Deployment | None = None,
 ) -> int:
     """Entry point. The clients and the deployment are injectable for tests."""
     logging.basicConfig(

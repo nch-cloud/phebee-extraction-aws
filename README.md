@@ -54,8 +54,7 @@ import reads, so a run's output can be imported directly.
 - **Tool images in ECR**, built from [phebee-tool-wrappers](https://github.com/nch-cloud/phebee-tool-wrappers).
   Use immutable tags: PheBee records the tag as the evidence creator.
 - **Locally:** `uv`, Docker, the AWS CLI and SAM CLI. `uv sync` installs the core
-  (`nch-cloud/phebee-extraction`) from its git tag; while that repository is still private you
-  also need read access to it, and `uv` uses your git credentials.
+  (`nch-cloud/phebee-extraction`) from its public git tag.
 
 ## Deploy
 
@@ -68,8 +67,7 @@ scripts/build_image.sh --push 123456789012.dkr.ecr.us-east-2.amazonaws.com/phebe
 ```
 
 The script builds both wheels on your machine and copies them into the image, so the Docker
-build is reproducible from pinned wheels and makes no network requests to GitHub (which also
-means it works while the core repository is private).
+build is reproducible from pinned wheels and makes no network requests to GitHub.
 
 **Architecture.** The image is built for `linux/arm64` by default (Graviton); set
 `PLATFORM=linux/amd64` for an x86 queue. It must match the compute environment behind
@@ -118,9 +116,7 @@ GitHub. To use it, create an environment (for example `dev`) with these variable
 | `CPU_JOB_QUEUE_ARN`, `GPU_JOB_QUEUE_ARN` | Existing Batch queues (`GPU_JOB_QUEUE_ARN` may be empty) |
 | `PLATFORM` | `linux/arm64` or `linux/amd64`, matching the CPU queue's instances (default `linux/arm64`) |
 | `S3_ACCESS_LOG_BUCKET` | Optional. Existing bucket for the data bucket's access logs; required where guardrails demand S3 access logging |
-
-and, only while the core repository is private, the `CORE_REPO_TOKEN` secret described under
-Development. Other systems (CodePipeline,
+. Other systems (CodePipeline,
 Jenkins, GitLab CI) map onto the same two steps; the workflow file shows the exact commands.
 
 **The AWS side: the deploy role.** The workflow gets credentials by assuming an IAM role
@@ -186,10 +182,8 @@ tool), `environment` (extra variables for the tool), `job_role` (a role with per
 beyond S3, see below), and `job_definition` / `job_queue` to bypass registration and use ones
 you manage.
 
-Optional run keys: `input_format` (`auto`, `json`, `jsonl`, `csv`, `parquet`),
-`phebee_batch_id` (PheBee's `batch_id`, default 0), `row_num_stride` (row numbers reserved
-per note, default 1000; see below), and `environment` (variables for every stage; see the
-next section).
+Optional run keys: `input_format` (`auto`, `json`, `jsonl`, `csv`, `parquet`) and
+`environment` (variables for every stage; see the next section).
 
 ### Tools that need other AWS permissions or settings
 
@@ -273,9 +267,8 @@ To import into PheBee, point its bulk import at `{prefix}/jsonl/`. Provenance in
 matches a local run: `evidence_creator_id` is `repository:tag` (chained tools joined with
 `+`), `evidence_creator_digest` the ECR digests.
 
-**Row numbers.** Part files are written independently, so each batch is given a block of
-`batch_size * row_num_stride` row numbers and `transform` fails if a batch would exceed it.
-The default stride of 1000 per note is far above any real annotation count.
+**Row numbers.** Each part file's `row_num` is its 1-based line number. PheBee's import does not
+read it (and derives its own `batch_id` from the file name), so part files need no coordination.
 
 ## Failure handling
 
@@ -290,17 +283,13 @@ The default stride of 1000 per note is far above any real annotation count.
 ## Development
 
 ```bash
-uv sync                  # needs read access to nch-cloud/phebee-extraction
+uv sync
 uv run pytest            # no AWS needed: S3, ECR and Batch are faked
 uv run ruff check . && uv run ruff format --check .
 sam validate --lint      # cfn-lint on the template
 ```
 
-CI runs the same on pushes and pull requests. While the core repository is still private, CI
-needs a `CORE_REPO_TOKEN` secret (a fine-grained PAT or GitHub App token with read access to
-`nch-cloud/phebee-extraction`; the default `GITHUB_TOKEN` cannot read other repositories).
-Once the core is public, delete the secret: the workflows skip the credential step when it is
-unset and clone anonymously.
+CI runs the same on pushes and pull requests.
 
 ```
 src/phebee_extraction_aws/

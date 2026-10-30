@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Follows phebee-extraction v1.0.0 as retagged: the loader converts the subject column to a
+  string (`string_columns`), and the per-batch row-number blocks (`start_row_num`,
+  `row_num_stride`) and `phebee_batch_id` are gone, since PheBee's import reads neither
+  `row_num` nor the emitted `batch_id`. Each part file's `row_num` is its line number.
+- The core repository is public, so the `CORE_REPO_TOKEN` secret and the credential steps in
+  CI and the deploy workflow are removed.
+- Python 3.11 or later, matching the core; CI covers 3.11 to 3.14.
+
 ### Added
 
 - Initial scaffold: `plan` and `transform` jobs built on `phebee-extraction` v1.0.0, a Step

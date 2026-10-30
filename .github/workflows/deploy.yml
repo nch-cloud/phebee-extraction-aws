@@ -11,8 +11,6 @@
 #              CPU_JOB_QUEUE_ARN, GPU_JOB_QUEUE_ARN (may be empty),
 #              PLATFORM (linux/arm64 or linux/amd64; must match the CPU queue's instances),
 #              S3_ACCESS_LOG_BUCKET (optional; required where guardrails demand S3 access logging)
-#   secret     CORE_REPO_TOKEN  (read access to nch-cloud/phebee-extraction; only while that
-#                                repository is private, otherwise leave unset)
 # AWS_DEPLOY_ROLE_ARN is a role that trusts GitHub's OIDC provider for this repository and
 # can push to the ECR repository and run CloudFormation for the stack. No AWS keys are stored.
 
@@ -38,8 +36,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment }}
-    env:
-      CORE_REPO_TOKEN: ${{ secrets.CORE_REPO_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
@@ -55,9 +51,6 @@ jobs:
         with:
           use-installer: true
 
-      - name: Allow uv and pip to clone the core repo (only needed while it is private)
-        if: env.CORE_REPO_TOKEN != ''
-        run: git config --global url."https://x-access-token:${CORE_REPO_TOKEN}@github.com/".insteadOf "https://github.com/"
 
       - name: Build and push the utility image
         # Tagged with the commit SHA: immutable, and "what is deployed?" is answered by the tag.

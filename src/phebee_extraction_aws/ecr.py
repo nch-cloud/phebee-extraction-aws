@@ -8,7 +8,7 @@ here it comes from ECR's describe-images.
 
 import re
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 ECR_HOST = re.compile(r"^(?P<account>\d{12})\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.amazonaws\.com$")
 
@@ -17,10 +17,10 @@ ECR_HOST = re.compile(r"^(?P<account>\d{12})\.dkr\.ecr\.(?P<region>[a-z0-9-]+)\.
 class ImageUri:
     """`[registry/]repository[:tag][@digest]`"""
 
-    registry: Optional[str]
+    registry: str | None
     repository: str
-    tag: Optional[str]
-    digest: Optional[str]
+    tag: str | None
+    digest: str | None
 
     @classmethod
     def parse(cls, image: str) -> "ImageUri":
@@ -42,19 +42,17 @@ class ImageUri:
         return f"{self.repository}:{self.tag}" if self.tag else self.repository
 
     @property
-    def ecr_account(self) -> Optional[str]:
+    def ecr_account(self) -> str | None:
         match = ECR_HOST.match(self.registry or "")
         return match.group("account") if match else None
 
     @property
-    def ecr_region(self) -> Optional[str]:
+    def ecr_region(self) -> str | None:
         match = ECR_HOST.match(self.registry or "")
         return match.group("region") if match else None
 
 
-def resolve_image_ref(
-    image: str, ecr_client: Optional[Any] = None, region: Optional[str] = None
-) -> str:
+def resolve_image_ref(image: str, ecr_client: Any | None = None, region: str | None = None) -> str:
     """
     `repository:tag@sha256:...`, the form the core takes as an image ref.
 

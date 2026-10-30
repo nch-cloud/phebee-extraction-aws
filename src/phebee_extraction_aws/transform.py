@@ -9,7 +9,6 @@ run's `jsonl/` prefix, which is the shape PheBee's bulk import reads.
 import json
 import logging
 import os
-from typing import Optional
 
 from phebee_extraction import (
     PheBeeConfig,
@@ -23,7 +22,7 @@ from phebee_extraction_aws.s3 import S3, S3Uri
 logger = logging.getLogger(__name__)
 
 
-def transform_batch(item: dict, workdir: str, s3: Optional[S3] = None) -> dict:
+def transform_batch(item: dict, workdir: str, s3: S3 | None = None) -> dict:
     """Transform one planned batch. Returns a small result dict for the Map's result writer."""
     s3 = s3 or S3()
     spec = item["transform"]
@@ -41,21 +40,10 @@ def transform_batch(item: dict, workdir: str, s3: Optional[S3] = None) -> dict:
     config = PheBeeConfig(
         project_id=spec["project_id"],
         subject_id_column=spec["subject_id_column"],
-        batch_id=spec["phebee_batch_id"],
         image_refs=spec["image_refs"],
     )
     part_path = os.path.join(workdir, "part.json")
-    stats = write_phebee_jsonl([output], config, part_path, start_row_num=spec["start_row_num"])
-
-    # The plan reserved a block of row numbers for this batch; refuse to overflow it, because
-    # the next batch's numbers start right after it.
-    reserved = item["record_count"] * spec["row_num_stride"]
-    if stats.records_written > reserved:
-        raise ValueError(
-            f"{item['batch_id']} produced {stats.records_written} PheBee records, more than the "
-            f"{reserved} row numbers reserved for it (record_count * row_num_stride). "
-            "Increase row_num_stride in the run config."
-        )
+    stats = write_phebee_jsonl([output], config, part_path)
 
     part_uri = S3Uri.parse(spec["part_uri"])
     s3.upload(part_path, part_uri)

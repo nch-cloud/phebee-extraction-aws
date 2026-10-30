@@ -32,7 +32,7 @@ Layout under s3://{bucket}/{prefix}/:
 import logging
 import os
 from dataclasses import asdict, dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from phebee_extraction import (
     create_batches,
@@ -48,11 +48,6 @@ from phebee_extraction_aws.s3 import S3, S3Uri
 
 logger = logging.getLogger(__name__)
 
-# row_num must not collide between part files. Each batch is given a block of
-# batch_size * ROW_NUM_STRIDE_PER_NOTE numbers; the transform step fails if a batch produces
-# more records than that, which would need a note with over ROW_NUM_STRIDE_PER_NOTE
-# annotations.
-ROW_NUM_STRIDE_PER_NOTE = 1000
 
 # Environment variables every tool container receives: the neutral names and, for older
 # images, the legacy AWS-pipeline names (see INTERFACE.md in the core).
@@ -68,17 +63,17 @@ class StageSpec:
     name: str  # short label used in Batch job names, e.g. "clinphen"
     image: str  # ECR image URI to run; also used to resolve the digest for provenance
     gpu: bool = False  # register with one GPU and submit to the GPU queue
-    vcpus: Optional[int] = None  # override the stack's defaults for this tool
-    memory_mib: Optional[int] = None
+    vcpus: int | None = None  # override the stack's defaults for this tool
+    memory_mib: int | None = None
     # Role the tool runs as, for tools that need more than S3. Either a short name that
     # expands to {AppName}-tool-{job_role} in this account, or a full ARN (which must still be
     # named {AppName}-tool-*). Default: the stack's S3-only role.
-    job_role: Optional[str] = None
-    job_role_arn: Optional[str] = None
+    job_role: str | None = None
+    job_role_arn: str | None = None
     # Variables for this tool only; override the run's `environment` and the defaults
     environment: dict[str, str] = field(default_factory=dict)
-    job_definition: Optional[str] = None  # escape hatch: use this definition instead of registering
-    job_queue: Optional[str] = None  # escape hatch: use this queue instead of the CPU/GPU default
+    job_definition: str | None = None  # escape hatch: use this definition instead of registering
+    job_queue: str | None = None  # escape hatch: use this queue instead of the CPU/GPU default
 
 
 @dataclass
@@ -95,8 +90,6 @@ class RunConfig:
     id_column: str = "note_id"
     text_column: str = "text"
     subject_id_column: str = "subject_id"
-    phebee_batch_id: int = 0
-    row_num_stride: int = ROW_NUM_STRIDE_PER_NOTE
     # Variables every stage receives (model ids, regions, ...); a stage may override them
     environment: dict[str, str] = field(default_factory=dict)
     extra: dict = field(default_factory=dict)  # unknown keys, kept so nothing is lost
@@ -156,8 +149,8 @@ def stage_environment(
 def resolve_stages(
     config: RunConfig,
     deployment: Deployment,
-    ecr_client: Optional[Any] = None,
-    batch_client: Optional[Any] = None,
+    ecr_client: Any | None = None,
+    batch_client: Any | None = None,
 ) -> list[dict]:
     """
     Per stage: the job definition and queue to submit to, the image ref with digest, the role,
@@ -204,9 +197,9 @@ def plan_run(
     config: RunConfig,
     workdir: str,
     deployment: Deployment,
-    s3: Optional[S3] = None,
-    ecr_client: Optional[Any] = None,
-    batch_client: Optional[Any] = None,
+    s3: S3 | None = None,
+    ecr_client: Any | None = None,
+    batch_client: Any | None = None,
 ) -> dict:
     """Split the input, upload batch files, resolve the stages, write the plan. Returns it."""
     s3 = s3 or S3()
@@ -221,6 +214,7 @@ def plan_run(
         format=config.input_format,
         id_column=config.id_column,
         text_column=config.text_column,
+        string_columns={config.subject_id_column},
     )
     validate_input_records(records)
 
@@ -253,7 +247,6 @@ def plan_run(
                 }
             )
 
-        start_row_num = (batch.batch_num - 1) * config.batch_size * config.row_num_stride + 1
         items.append(
             {
                 "batch_id": batch.batch_id,
@@ -264,11 +257,8 @@ def plan_run(
                     "output_uri": item_stages[-1]["output_uri"],
                     "original_input_uri": item_stages[0]["input_uri"],
                     "part_uri": str(run.join("jsonl", f"part-{batch.batch_id}.json")),
-                    "start_row_num": start_row_num,
-                    "row_num_stride": config.row_num_stride,
                     "project_id": config.project_id,
                     "subject_id_column": config.subject_id_column,
-                    "phebee_batch_id": config.phebee_batch_id,
                     "image_refs": image_refs,
                 },
             }

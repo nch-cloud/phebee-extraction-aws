@@ -23,7 +23,7 @@ import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from typing import Any, Optional
+from typing import Any
 
 from phebee_extraction_aws.ecr import ImageUri
 
@@ -44,7 +44,7 @@ class Deployment:
     execution_role_arn: str
     log_group: str
     partition: str = "aws"
-    gpu_job_queue_arn: Optional[str] = None
+    gpu_job_queue_arn: str | None = None
     tool_vcpus: int = 2
     tool_memory_mib: int = 8192
     gpu_tool_vcpus: int = 4
@@ -107,9 +107,9 @@ def job_definition_spec(
     image: str,
     deployment: Deployment,
     gpu: bool = False,
-    vcpus: Optional[int] = None,
-    memory_mib: Optional[int] = None,
-    job_role_arn: Optional[str] = None,
+    vcpus: int | None = None,
+    memory_mib: int | None = None,
+    job_role_arn: str | None = None,
 ) -> dict:
     """The register_job_definition arguments for a tool image, minus the name"""
     vcpus = vcpus or (deployment.gpu_tool_vcpus if gpu else deployment.tool_vcpus)
@@ -147,11 +147,11 @@ def job_definition_spec(
 def ensure_job_definition(
     image: str,
     deployment: Deployment,
-    batch_client: Optional[Any] = None,
+    batch_client: Any | None = None,
     gpu: bool = False,
-    vcpus: Optional[int] = None,
-    memory_mib: Optional[int] = None,
-    job_role_arn: Optional[str] = None,
+    vcpus: int | None = None,
+    memory_mib: int | None = None,
+    job_role_arn: str | None = None,
 ) -> str:
     """Return the ARN of an ACTIVE job definition for this image and settings, registering one if needed"""
     if batch_client is None:

@@ -3,7 +3,7 @@
 import json
 import os
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass(frozen=True)
@@ -44,7 +44,7 @@ class S3Uri:
 class S3:
     """The three operations the jobs need. `client` is a boto3 S3 client or a test double."""
 
-    def __init__(self, client: Optional[Any] = None):
+    def __init__(self, client: Any | None = None):
         if client is None:
             import boto3
 

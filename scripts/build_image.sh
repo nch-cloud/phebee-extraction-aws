@@ -13,8 +13,7 @@
 # utility jobs run on, whatever machine builds the image. Pipelines should set it explicitly.
 #
 # Both wheels are built here on the host and copied into the image, so the Docker build is
-# reproducible from pinned wheels and makes no requests to GitHub. It also means the build
-# works while the core repository is private: git credentials are only needed on the host.
+# reproducible from pinned wheels and makes no requests to GitHub.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
