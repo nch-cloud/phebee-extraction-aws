@@ -69,6 +69,10 @@ jobs:
       - uses: aws-actions/setup-sam@v2
         with:
           use-installer: true
+      - uses: docker/setup-qemu-action@v3
+        # GitHub-hosted runners are x86; building a linux/arm64 image on one needs QEMU
+        # registered for the other architectures, or the first RUN fails with
+        # "exec format error". Docker Desktop does this itself, which is why local builds work.
 
       - name: Build and push the utility image
         # Two tags for the same image: a readable one from `git describe` (exactly the release
