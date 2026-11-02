@@ -208,7 +208,6 @@ Resources:
                   - logs:DeleteLogGroup
                   - logs:PutRetentionPolicy
                   - logs:DeleteRetentionPolicy
-                  - logs:DescribeLogGroups
                   - logs:TagLogGroup
                   - logs:ListTagsForResource
                   - logs:TagResource
@@ -216,6 +215,12 @@ Resources:
                 Resource:
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/batch/${AppName}*"
                   - !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/vendedlogs/states/${AppName}-*"
+              # DescribeLogGroups does not support resource-level permissions. CloudFormation
+              # calls it to resolve a log group's Arn attribute (the state machine's logging
+              # destination), so a scoped grant is silently a denial.
+              - Effect: Allow
+                Action: logs:DescribeLogGroups
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - batch:RegisterJobDefinition
