@@ -12,7 +12,7 @@ from phebee_extraction_aws.batch import (
     job_definition_name,
 )
 
-IMAGE = "595912345678.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-clinphen:batch-v1.0.0_c58cc41"
+IMAGE = "595912345678.dkr.ecr.us-east-2.amazonaws.com/tools/extractor:1.4.0_c58cc41"
 
 
 @pytest.fixture
@@ -86,7 +86,7 @@ def test_registers_once_and_reuses_the_active_definition(deployment):
     assert first == second
     assert len(batch.registered) == 1
     assert first.startswith(
-        "arn:aws:batch:us-east-2:123456789012:job-definition/phebee-extraction-ods-phebee-clinphen-"
+        "arn:aws:batch:us-east-2:123456789012:job-definition/phebee-extraction-tools-extractor-"
     )
 
 
@@ -100,7 +100,7 @@ def test_registered_definition_runs_the_image_with_the_stack_roles_and_logging(d
     assert props["jobRoleArn"] == "arn:role:tool"
     assert props["executionRoleArn"] == "arn:role:exec"
     assert props["logConfiguration"]["options"]["awslogs-group"] == "/aws/batch/phebee-extraction"
-    assert props["logConfiguration"]["options"]["awslogs-stream-prefix"] == "ods-phebee-clinphen"
+    assert props["logConfiguration"]["options"]["awslogs-stream-prefix"] == "tools-extractor"
     assert props["resourceRequirements"] == [
         {"type": "VCPU", "value": "2"},
         {"type": "MEMORY", "value": "8192"},
@@ -147,21 +147,21 @@ def test_stage_job_role_replaces_the_default_and_changes_the_definition(deployme
         IMAGE,
         deployment,
         batch,
-        job_role_arn="arn:aws:iam::123456789012:role/phebee-extraction-tool-raghpo",
+        job_role_arn="arn:aws:iam::123456789012:role/phebee-extraction-tool-llm-extractor",
     )
 
     assert default != custom
     by_arn = {d["jobDefinitionArn"]: d for d in batch.registered}
     assert by_arn[default]["containerProperties"]["jobRoleArn"] == "arn:role:tool"
     assert by_arn[custom]["containerProperties"]["jobRoleArn"].endswith(
-        "role/phebee-extraction-tool-raghpo"
+        "role/phebee-extraction-tool-llm-extractor"
     )
 
 
 def test_job_definition_name_is_valid_for_batch(deployment):
-    name = job_definition_name("phebee-extraction", "ods/phebee-clinphen", {"k": "v"})
+    name = job_definition_name("phebee-extraction", "tools/extractor", {"k": "v"})
     assert re.fullmatch(r"[A-Za-z0-9_-]+", name)
-    assert name.startswith("phebee-extraction-ods-phebee-clinphen-")
+    assert name.startswith("phebee-extraction-tools-extractor-")
 
     long_name = job_definition_name("a" * 100, "r" * 100, {"k": "v"})
     assert len(long_name) <= JOB_DEFINITION_NAME_MAX

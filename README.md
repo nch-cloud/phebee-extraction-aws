@@ -4,16 +4,8 @@ AWS deployment of [phebee-extraction](https://github.com/nch-cloud/phebee-extrac
 Functions and AWS Batch run the extraction containers over clinical notes in S3 and write
 PheBee import-ready output.
 
-**Which AWS repo do I want?**
-
-- **This one** if you want the lightweight tool's pipeline on AWS: a single state machine,
-  Batch jobs, S3 in and out, and no data platform. Most runs of up to a few hundred thousand
-  notes fit here.
-- **[phebee-extraction-pipeline](https://github.com/nch-cloud/phebee-extraction-pipeline)**
-  if you need the enterprise pipeline: EMR Serverless, Iceberg status tracking, resume, and
-  the scale that goes with them.
-
-Both run the same tool images and produce the same PheBee format.
+It is deliberately small: a single state machine, Batch jobs, S3 in and out, and no data
+platform. Most runs of up to a few hundred thousand notes fit here.
 
 ## How it works
 
@@ -51,7 +43,8 @@ import reads, so a run's output can be imported directly.
 
 - **AWS Batch job queues** for CPU (and GPU if you run GPU tools), with compute environments
   that can pull from your ECR registry. The stack does not create them.
-- **Tool images in ECR**, built from [phebee-tool-wrappers](https://github.com/nch-cloud/phebee-tool-wrappers).
+- **Tool images in ECR** that implement the core's
+  [container interface](https://github.com/nch-cloud/phebee-extraction/blob/main/INTERFACE.md).
   Use immutable tags: PheBee records the tag as the evidence creator.
 - **Locally:** `uv`, Docker, the AWS CLI and SAM CLI. `uv sync` installs the core
   (`nch-cloud/phebee-extraction`) from its public git tag.
@@ -175,12 +168,12 @@ pipeline order by image:
   "batch_size": 1000,
   "stages": [
     {
-      "name": "clinphen",
-      "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-clinphen:batch-v1.0.0_clinphen-1.28_hpo-v2025-10-22_c58cc41"
+      "name": "extractor",
+      "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/tools/extractor:1.4.0"
     },
     {
-      "name": "raghpo",
-      "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-raghpo:batch-v1.0.0_abc1234",
+      "name": "llm-extractor",
+      "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/tools/llm-extractor:2.1.0",
       "gpu": true
     }
   ]
@@ -207,7 +200,7 @@ Optional run keys: `input_format` (`auto`, `json`, `jsonl`, `csv`, `parquet`) an
 
 By default every tool runs as the stack's `ToolJobRole`, which can only read its stage input
 and write its stage output under the run's `batches/` prefix. A tool that calls another AWS
-service, for example RAG-HPO or LEAP calling Bedrock, needs two things, both set per stage:
+service, for example an LLM-based tool calling Bedrock, needs two things, both set per stage:
 
 1. **A role with the permissions**, created once per *permission set* and shared by every
    tool that needs it. Roles are named `{AppName}-tool-<name>`; the plan job may only assign
@@ -223,14 +216,13 @@ service, for example RAG-HPO or LEAP calling Bedrock, needs two things, both set
        BedrockModelArns=arn:aws:bedrock:us-east-2:123456789012:inference-profile/us.anthropic.claude-3-haiku-20240307-v1:0
    ```
 
-   Other permissions go in managed policies you attach with `ManagedPolicyArns` (RagTag, for
-   instance, calls Bedrock Mantle and needs `bedrock-mantle:CreateInference` and
-   `bedrock-mantle:CallWithBearerToken`). You can also create the role any other way, as long
-   as it trusts `ecs-tasks.amazonaws.com`, has the S3 statement, and follows the naming.
+   Other permissions go in managed policies you attach with `ManagedPolicyArns`. You can also
+   create the role any other way, as long as it trusts `ecs-tasks.amazonaws.com`, has the S3
+   statement, and follows the naming.
 
-2. **Its configuration**, via `environment`. The Bedrock tools read their model from variables
-   such as `BEDROCK_MODEL_ID` or `MODEL_ID` (check the wrapper's `tool_impl.py` for the exact
-   names). Variables can be set once for the whole run (top-level `environment`) or per stage,
+2. **Its configuration**, via `environment`. A Bedrock tool typically reads its model from a
+   variable such as `BEDROCK_MODEL_ID` (check the tool's documentation for the exact names).
+   Variables can be set once for the whole run (top-level `environment`) or per stage,
    and are layered in this order, later overriding earlier for the same name: the
    `INPUT_URI` / `OUTPUT_URI` variables (always set, never overridable) → `AWS_REGION` and
    `AWS_DEFAULT_REGION` from the stack's region → the run's `environment` → the stage's
@@ -241,8 +233,8 @@ Then refer to the role by its short name:
 
 ```json
 {
-  "name": "raghpo",
-  "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-raghpo:batch-v1.0.0_abc1234",
+  "name": "llm-extractor",
+  "image": "123456789012.dkr.ecr.us-east-2.amazonaws.com/tools/llm-extractor:2.1.0",
   "gpu": true,
   "job_role": "bedrock",
   "environment": { "BEDROCK_MODEL_ID": "us.anthropic.claude-3-haiku-20240307-v1:0" }

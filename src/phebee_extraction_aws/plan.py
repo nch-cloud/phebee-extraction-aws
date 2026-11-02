@@ -60,7 +60,7 @@ RESERVED_ENV_VARS = frozenset(INPUT_ENV_VARS + OUTPUT_ENV_VARS)
 class StageSpec:
     """One tool in the pipeline, in order. Only `name` and `image` are required."""
 
-    name: str  # short label used in Batch job names, e.g. "clinphen"
+    name: str  # short label used in Batch job names, e.g. "extractor"
     image: str  # ECR image URI to run; also used to resolve the digest for provenance
     gpu: bool = False  # register with one GPU and submit to the GPU queue
     vcpus: int | None = None  # override the stack's defaults for this tool
