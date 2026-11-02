@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- `scripts/build_image.sh` passes `--pull`, so every build fetches the current base image
+  instead of a cached one and picks up its security fixes (prompted by the October 2026
+  eMudhra/emSign CA incident). Runtime TLS in the utility image goes through botocore's own
+  certificate bundle, which never carried the affected roots.
+
 ### Changed
 
 - Follows phebee-extraction v1.0.0 as retagged: the loader converts the subject column to a
