@@ -26,7 +26,7 @@ class ImageUri:
     def parse(cls, image: str) -> "ImageUri":
         rest, _, digest = image.partition("@")
         # A first path component with a dot or a port is a registry host; a plain name
-        # (e.g. "ods/phebee-clinphen") is a repository with a namespace.
+        # (e.g. "tools/extractor") is a repository with a namespace.
         first, slash, remainder = rest.partition("/")
         registry = None
         if slash and ("." in first or ":" in first or first == "localhost"):
@@ -57,7 +57,7 @@ def resolve_image_ref(image: str, ecr_client: Any | None = None, region: str | N
     `repository:tag@sha256:...`, the form the core takes as an image ref.
 
     The registry host is dropped from the name so `evidence_creator_id` reads
-    `ods/phebee-clinphen:tag`, matching production. An image already pinned with a digest is
+    `tools/extractor:tag`, the same in every account. An image already pinned with a digest is
     returned as-is (minus the registry) without calling ECR.
 
     Without an injected client, one is created in the registry's own region (parsed from the

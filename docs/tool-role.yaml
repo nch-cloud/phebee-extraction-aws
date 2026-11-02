@@ -34,7 +34,7 @@ Parameters:
     Default: ""
     Description: >
       Optional. Comma-separated ARNs of managed policies with any other permissions the tools
-      need (for example the bedrock-mantle actions RagTag uses). Create them to suit the tool.
+      need. Create them to suit the tool.
 
 Conditions:
   HasBedrockModels: !Not [!Equals [!Ref BedrockModelArns, ""]]

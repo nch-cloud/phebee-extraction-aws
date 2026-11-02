@@ -26,8 +26,8 @@ NOTES = [
 KEYWORDS = {"fever": "HP:0001945", "cough": "HP:0012735", "pneumonia": "HP:0002090",
             "headaches": "HP:0002315", "developmental delay": "HP:0001263"}  # fmt: skip
 REGISTRY = "595912345678.dkr.ecr.us-east-2.amazonaws.com"
-CLINPHEN = f"{REGISTRY}/ods/phebee-clinphen:v1"
-CONTEXT = f"{REGISTRY}/ods/phebee-context:v2"
+EXTRACTOR = f"{REGISTRY}/tools/extractor:v1"
+CONTEXT = f"{REGISTRY}/tools/context:v2"
 
 DEPLOYMENT = Deployment(
     app_name="phebee-extraction",
@@ -50,7 +50,7 @@ def base_config(**overrides):
         "project_id": "proj",
         "batch_size": 2,
         "stages": [
-            {"name": "clinphen", "image": CLINPHEN},
+            {"name": "extractor", "image": EXTRACTOR},
             {"name": "context", "image": CONTEXT, "gpu": True},
         ],
     }
@@ -63,7 +63,7 @@ def clients():
     s3c = FakeS3Client()
     s3c.put("data", "in/notes.jsonl", "".join(json.dumps(n) + "\n" for n in NOTES))
     ecr = FakeEcrClient(
-        {("ods/phebee-clinphen", "v1"): "sha256:aaa", ("ods/phebee-context", "v2"): "sha256:bbb"}
+        {("tools/extractor", "v1"): "sha256:aaa", ("tools/context", "v2"): "sha256:bbb"}
     )
     return s3c, ecr, FakeBatchClient()
 
@@ -106,8 +106,8 @@ def test_plan_writes_batches_manifest_and_plan(tmp_path, clients):
 
     assert plan["total_records"] == 5 and plan["batch_count"] == 3
     assert plan["image_refs"] == [
-        "ods/phebee-clinphen:v1@sha256:aaa",
-        "ods/phebee-context:v2@sha256:bbb",
+        "tools/extractor:v1@sha256:aaa",
+        "tools/context:v2@sha256:bbb",
     ]
     assert len(ecr.calls) == 2  # one digest lookup per tool, not per batch
     assert len(batch.registered) == 2  # one job definition per tool, not per batch
@@ -130,18 +130,18 @@ def test_plan_registers_job_definitions_for_the_images_and_picks_queues(tmp_path
     s3c, ecr, batch = clients
     plan = run_plan(clients, tmp_path)
 
-    clinphen, context = plan["stages"]
+    extractor, context = plan["stages"]
     registered = {d["containerProperties"]["image"]: d for d in batch.registered}
-    assert set(registered) == {CLINPHEN, CONTEXT}  # the definitions run exactly these images
-    assert clinphen["job_definition"] == registered[CLINPHEN]["jobDefinitionArn"]
+    assert set(registered) == {EXTRACTOR, CONTEXT}  # the definitions run exactly these images
+    assert extractor["job_definition"] == registered[EXTRACTOR]["jobDefinitionArn"]
     assert context["job_definition"] == registered[CONTEXT]["jobDefinitionArn"]
-    assert clinphen["job_queue"] == "arn:q:cpu"
+    assert extractor["job_queue"] == "arn:q:cpu"
     assert context["job_queue"] == "arn:q:gpu"  # gpu: true
     assert {
         r["type"] for r in registered[CONTEXT]["containerProperties"]["resourceRequirements"]
     } == {"VCPU", "MEMORY", "GPU"}
     # provenance comes from the same image the definition runs
-    assert clinphen["image_ref"] == "ods/phebee-clinphen:v1@sha256:aaa"
+    assert extractor["image_ref"] == "tools/extractor:v1@sha256:aaa"
 
 
 def test_plan_reuses_job_definitions_across_runs(tmp_path, clients):
@@ -158,8 +158,8 @@ def test_plan_honours_an_explicit_job_definition_and_queue(tmp_path, clients):
         tmp_path,
         stages=[
             {
-                "name": "clinphen",
-                "image": CLINPHEN,
+                "name": "extractor",
+                "image": EXTRACTOR,
                 "job_definition": "arn:jd:mine",
                 "job_queue": "arn:q:mine",
             }
@@ -182,7 +182,7 @@ def test_plan_items_chain_stage_uris_and_carry_everything_the_jobs_need(tmp_path
     item = plan["items"][1]
 
     s1, s2 = item["stages"]
-    assert s1["name"] == "clinphen" and s2["name"] == "context"
+    assert s1["name"] == "extractor" and s2["name"] == "context"
     assert s1["job_definition"] == plan["stages"][0]["job_definition"]
     assert s2["job_queue"] == "arn:q:gpu"
     assert s1["input_uri"] == "s3://data/runs/r1/batches/batch_000002_input.json"
@@ -207,8 +207,8 @@ def test_stage_environment_has_both_uri_name_pairs_then_the_tools_own_variables(
         tmp_path,
         stages=[
             {
-                "name": "raghpo",
-                "image": CLINPHEN,
+                "name": "llm-extractor",
+                "image": EXTRACTOR,
                 "environment": {
                     "BEDROCK_MODEL_ID": "us.anthropic.claude-3-haiku",
                     "AWS_REGION": "us-east-2",
@@ -239,7 +239,7 @@ def test_environment_layers_defaults_then_run_then_stage(tmp_path, clients):
         tmp_path,
         environment={"BEDROCK_MODEL_ID": "run-model", "SHARED": "run"},
         stages=[
-            {"name": "a", "image": CLINPHEN},
+            {"name": "a", "image": EXTRACTOR},
             {
                 "name": "b",
                 "image": CONTEXT,
@@ -278,7 +278,7 @@ def test_stage_may_not_override_the_io_variables():
     with pytest.raises(ValueError, match="reserved environment variables"):
         RunConfig.from_dict(
             base_config(
-                stages=[{"name": "t", "image": CLINPHEN, "environment": {"INPUT_URI": "x"}}]
+                stages=[{"name": "t", "image": EXTRACTOR, "environment": {"INPUT_URI": "x"}}]
             )
         )
 
@@ -289,29 +289,31 @@ def test_stage_job_role_is_used_for_that_tools_definition_only(tmp_path, clients
         clients,
         tmp_path,
         stages=[
-            {"name": "clinphen", "image": CLINPHEN},
+            {"name": "extractor", "image": EXTRACTOR},
             {
-                "name": "raghpo",
+                "name": "llm-extractor",
                 "image": CONTEXT,
-                "job_role_arn": "arn:aws:iam::123456789012:role/phebee-extraction-tool-raghpo",
+                "job_role_arn": "arn:aws:iam::123456789012:role/phebee-extraction-tool-llm-extractor",
             },
         ],
     )
-    clinphen, raghpo = plan["stages"]
-    assert clinphen["job_role_arn"] == "arn:role:tool"  # the stack's default
-    assert raghpo["job_role_arn"].endswith("tool-raghpo")
+    extractor, llm = plan["stages"]
+    assert extractor["job_role_arn"] == "arn:role:tool"  # the stack's default
+    assert llm["job_role_arn"].endswith("tool-llm-extractor")
     roles = {
         d["containerProperties"]["image"]: d["containerProperties"]["jobRoleArn"]
         for d in batch.registered
     }
-    assert roles[CLINPHEN] == "arn:role:tool"
-    assert roles[CONTEXT].endswith("tool-raghpo")
+    assert roles[EXTRACTOR] == "arn:role:tool"
+    assert roles[CONTEXT].endswith("tool-llm-extractor")
 
 
 def test_stage_job_role_short_name_expands_to_the_tool_role_in_this_account(tmp_path, clients):
     s3c, ecr, batch = clients
     plan = run_plan(
-        clients, tmp_path, stages=[{"name": "raghpo", "image": CLINPHEN, "job_role": "bedrock"}]
+        clients,
+        tmp_path,
+        stages=[{"name": "llm-extractor", "image": EXTRACTOR, "job_role": "bedrock"}],
     )
     (stage,) = plan["stages"]
     expected = "arn:aws:iam::123456789012:role/phebee-extraction-tool-bedrock"
@@ -323,7 +325,7 @@ def test_stage_may_not_set_both_job_role_forms():
     with pytest.raises(ValueError, match="both job_role and job_role_arn"):
         RunConfig.from_dict(
             base_config(
-                stages=[{"name": "t", "image": CLINPHEN, "job_role": "a", "job_role_arn": "arn:b"}]
+                stages=[{"name": "t", "image": EXTRACTOR, "job_role": "a", "job_role_arn": "arn:b"}]
             )
         )
 
@@ -359,7 +361,7 @@ def test_transform_produces_an_import_ready_part_file(tmp_path, clients):
     assert first["project_id"] == "proj"
     assert first["project_subject_id"] == "p1"  # merged back: the pretend tool dropped it
     ev = first["evidence"][0]
-    assert ev["evidence_creator_id"] == "ods/phebee-clinphen:v1+ods/phebee-context:v2"
+    assert ev["evidence_creator_id"] == "tools/extractor:v1+tools/context:v2"
     assert ev["evidence_creator_digest"] == "sha256:aaa+sha256:bbb"
     assert ev["contexts"] == {"negated": False, "family": False, "hypothetical": False}
 
@@ -394,7 +396,7 @@ def test_cli_plan_and_transform_via_env_vars(tmp_path, clients, monkeypatch, cap
     )
     summary = json.loads(capsys.readouterr().out)
     assert (summary["total_records"], summary["batch_count"]) == (5, 3)
-    assert [s["name"] for s in summary["stages"]] == ["clinphen", "context"]
+    assert [s["name"] for s in summary["stages"]] == ["extractor", "context"]
 
     items = json.loads(s3c.objects[("data", "runs/r1/plan/batches.json")])
     pretend_tool_run(s3c, items[2])

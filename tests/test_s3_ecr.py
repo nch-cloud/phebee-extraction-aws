@@ -48,10 +48,10 @@ def test_s3_roundtrip_through_fake_client(tmp_path):
 @pytest.mark.parametrize(
     "image,registry,repository,tag,digest",
     [
-        ("595912345678.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-clinphen:batch-v1.0.0_c58cc41",
-         "595912345678.dkr.ecr.us-east-2.amazonaws.com", "ods/phebee-clinphen", "batch-v1.0.0_c58cc41", None),
-        ("ods/phebee-clinphen:v1", None, "ods/phebee-clinphen", "v1", None),
-        ("clinphen", None, "clinphen", None, None),
+        ("595912345678.dkr.ecr.us-east-2.amazonaws.com/tools/extractor:1.4.0_c58cc41",
+         "595912345678.dkr.ecr.us-east-2.amazonaws.com", "tools/extractor", "1.4.0_c58cc41", None),
+        ("tools/extractor:v1", None, "tools/extractor", "v1", None),
+        ("extractor", None, "extractor", None, None),
         ("localhost:5000/tool:1.0", "localhost:5000", "tool", "1.0", None),
         ("tool@sha256:abc", None, "tool", None, "sha256:abc"),
         ("reg.example.com/ns/tool:2@sha256:def", "reg.example.com", "ns/tool", "2", "sha256:def"),
@@ -83,12 +83,10 @@ def test_ecr_account_is_only_set_for_ecr_hosts():
 
 
 def test_resolve_image_ref_strips_registry_and_adds_digest():
-    ecr = FakeEcrClient({("ods/phebee-clinphen", "v1"): "sha256:aaa"})
-    ref = resolve_image_ref(
-        "595912345678.dkr.ecr.us-east-2.amazonaws.com/ods/phebee-clinphen:v1", ecr
-    )
+    ecr = FakeEcrClient({("tools/extractor", "v1"): "sha256:aaa"})
+    ref = resolve_image_ref("595912345678.dkr.ecr.us-east-2.amazonaws.com/tools/extractor:v1", ecr)
 
-    assert ref == "ods/phebee-clinphen:v1@sha256:aaa"
+    assert ref == "tools/extractor:v1@sha256:aaa"
     assert ecr.calls[0]["registryId"] == "595912345678"  # cross-account lookups work
 
 

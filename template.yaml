@@ -3,9 +3,9 @@ Transform: AWS::Serverless-2016-10-31
 Description: >
   phebee-extraction-aws: Step Functions + AWS Batch deployment of phebee-extraction.
   Plans a run (splits notes into batches on S3), runs the extraction containers per batch
-  in order, and writes PheBee import-ready part files. Slim alternative to
-  phebee-extraction-pipeline; reuses existing Batch job queues. Tool images are named at
-  run time and their job definitions registered on first use, so no redeploy per tool.
+  in order, and writes PheBee import-ready part files. Reuses existing Batch job queues.
+  Tool images are named at run time and their job definitions registered on first use, so
+  no redeploy per tool.
 
 # ---------------------------------------------------------------------------------------------
 Parameters:
