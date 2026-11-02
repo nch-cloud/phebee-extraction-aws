@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- The deploy workflow registers QEMU before building, so the default `linux/arm64` image
+  builds on GitHub's x86 runners instead of failing with `exec format error` at the first
+  `RUN`.
+
 ### Security
 
 - `scripts/build_image.sh` passes `--pull`, so every build fetches the current base image
