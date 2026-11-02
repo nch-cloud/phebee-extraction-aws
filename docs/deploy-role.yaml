@@ -222,6 +222,14 @@ Resources:
                   - batch:DeregisterJobDefinition
                   - batch:DescribeJobDefinitions
                 Resource: "*"
+              # CloudFormation tags every resource it creates with the stack's tags, so
+              # registering the utility job definition also calls TagResource.
+              - Effect: Allow
+                Action:
+                  - batch:TagResource
+                  - batch:UntagResource
+                  - batch:ListTagsForResource
+                Resource: !Sub "arn:aws:batch:${AWS::Region}:${AWS::AccountId}:job-definition/${AppName}-*"
               - Effect: Allow
                 Action:
                   - states:CreateStateMachine
