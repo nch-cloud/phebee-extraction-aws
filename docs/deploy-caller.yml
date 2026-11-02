@@ -9,9 +9,10 @@
 #   1. Copy this file to .github/workflows/deploy.yml in a private repository.
 #   2. Create the GitHub environments there (dev, prod, ...) with the variables the
 #      phebee-extraction-aws README lists, exactly as you would in the public repository.
-#   3. Deploy docs/deploy-role.yaml with GitHubRepository set to THIS repository (owner/name):
-#      the OIDC subject is always the repository the run starts in, not the one that owns the
-#      reusable workflow.
+#   3. Deploy docs/deploy-role.yaml with GitHubRepository set to THIS repository, written as
+#      GitHub puts it in the OIDC subject (`gh api /repos/<owner>/<repo>/actions/oidc/customization/sub`;
+#      new repositories embed owner and repository IDs). The subject is always the repository
+#      the run starts in, not the one that owns the reusable workflow.
 #   4. Pin `uses:` below to the release tag you want to deploy. The image is built from that
 #      tag, so the stack and its provenance follow it.
 #

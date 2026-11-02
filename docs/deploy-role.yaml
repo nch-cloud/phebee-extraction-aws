@@ -9,10 +9,15 @@ Parameters:
   GitHubRepository:
     Type: String
     Description: >
-      owner/name of the repository whose Actions runs may deploy, e.g. nch-cloud/phebee-extraction-aws.
-      If the deploy workflow is called from a private repository (docs/deploy-caller.yml), name that
-      repository: the OIDC subject is the repository a run starts in.
-    AllowedPattern: "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"
+      The repository whose Actions runs may deploy, exactly as GitHub writes it in the OIDC
+      subject. Repositories created after 15 July 2026 use an immutable subject that embeds the
+      owner and repository IDs, e.g. my-org@188507437/my-deploy-repo@1440223880; older ones use
+      plain owner/name. Read the exact value with
+      `gh api /repos/<owner>/<repo>/actions/oidc/customization/sub` (the sub_claim_prefix, minus
+      its leading "repo:"). If the deploy workflow is called from a separate deploy repository
+      (docs/deploy-caller.yml), name that repository: the subject is the repository a run
+      starts in.
+    AllowedPattern: "^[A-Za-z0-9_.-]+(@[0-9]+)?/[A-Za-z0-9_.-]+(@[0-9]+)?$"
   GitHubEnvironment:
     Type: String
     Description: The GitHub environment whose runs may assume this role, e.g. dev or prod. One role per environment.

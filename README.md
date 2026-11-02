@@ -117,7 +117,7 @@ reviewers, deployment from tags only) decide who may deploy to what. To set it u
 1. Create the deploy repository and copy `docs/deploy-caller.yml` to its
    `.github/workflows/deploy.yml`. Pin `uses:` to the release tag you want to deploy.
 2. In the target account, create the deploy role (next section) with `GitHubRepository` set
-   to the deploy repository.
+   to the deploy repository, written the way GitHub puts it in the OIDC subject (see there).
 3. In the deploy repository, create an environment per target with the variables below.
 4. Actions tab, **Run workflow**, choose the environment.
 
@@ -145,12 +145,21 @@ file shows the exact commands.
 
 **The AWS side: the deploy role.** [`docs/deploy-role.yaml`](docs/deploy-role.yaml) creates
 the role the workflow assumes. Deploy it once per account and environment, by hand, naming the
-repository whose Actions runs will deploy (the deploy repository in the layout above):
+repository whose Actions runs will deploy (the deploy repository in the layout above). The
+name must match the token's subject exactly, and GitHub has two formats: repositories created
+after 15 July 2026 get an immutable subject that embeds the owner and repository IDs
+(`my-org@188507437/my-deploy-repo@1440223880`); older repositories use plain `owner/name`.
+Read the exact value from GitHub rather than guessing:
+
+```bash
+gh api /repos/<owner>/<repo>/actions/oidc/customization/sub --jq .sub_claim_prefix
+# -> repo:my-org@188507437/my-deploy-repo@1440223880   (drop the leading "repo:")
+```
 
 ```bash
 aws cloudformation deploy --stack-name phebee-extraction-deploy-role-dev \
   --template-file docs/deploy-role.yaml --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubRepository=<owner/name of the repository that runs the workflow> \
+  --parameter-overrides GitHubRepository=my-org@188507437/my-deploy-repo@1440223880 \
                         GitHubEnvironment=dev \
                         CreateOidcProvider=false   # true only if the account has no GitHub OIDC provider yet
 aws cloudformation describe-stacks --stack-name phebee-extraction-deploy-role-dev \
@@ -160,7 +169,9 @@ aws cloudformation describe-stacks --stack-name phebee-extraction-deploy-role-de
 Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. The role's trust policy
 accepts only tokens whose subject is `repo:<repository>:environment:<environment>`. GitHub sets
 that subject from the repository a run starts in, even when the job's steps come from a
-reusable workflow elsewhere, which is why the deploy repository is the one to name. A fork,
+reusable workflow elsewhere, which is why the deploy repository is the one to name. A wrong
+format shows up as `Not authorized to perform sts:AssumeRoleWithWebIdentity` in the
+credentials step; the stack's `TrustedSubject` output is the string the role expects. A fork,
 another repository, a pull request, or a run against a different environment cannot assume
 the role, and a `prod` role is only reachable through the `prod` environment and whatever
 reviewer rules you put on it. Its permissions are limited to pushing the utility image and
