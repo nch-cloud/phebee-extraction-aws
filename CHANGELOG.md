@@ -4,63 +4,67 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-### Fixed
+## [0.1.0] - 2026-11-02
 
-- The deploy workflow registers QEMU before building, so the default `linux/arm64` image
-  builds on GitHub's x86 runners instead of failing with `exec format error` at the first
-  `RUN`.
+First release: an AWS deployment of [phebee-extraction](https://github.com/nch-cloud/phebee-extraction)
+v1.0.0 on Step Functions and AWS Batch. Everything that reads notes, batches them or writes
+PheBee records is the core package, unchanged; this repo adds S3 staging, ECR digest lookup,
+Batch job definitions and the orchestration. Python 3.11 or later; CI covers 3.11 to 3.14.
 
-### Security
+### Pipeline
 
-- `scripts/build_image.sh` passes `--pull`, so every build fetches the current base image
-  instead of a cached one and picks up its security fixes (prompted by the October 2026
-  eMudhra/emSign CA incident). Runtime TLS in the utility image goes through botocore's own
-  certificate bundle, which never carried the affected roots.
+- A `plan` job splits the input into batches on S3 and writes the per-batch plan; a Distributed
+  Map runs each batch's tool chain as Batch jobs, in order; a `transform` job turns each batch's
+  output into a PheBee import-ready part file under `{prefix}/jsonl/`. The state machine only
+  iterates the plan, so the logic lives in Python and is tested without AWS (S3, ECR and Batch
+  are faked).
+- Tools are specified at run time by image. `plan` registers a Batch job definition per image
+  and settings on first use (`{AppName}-{repository}-{hash}`) and reuses it afterwards; the
+  stack has no per-tool parameters. Per stage: `gpu`, `vcpus`, `memory_mib`, `environment`,
+  `job_role` (short name, expands to `{AppName}-tool-<name>`) or `job_role_arn`, and an explicit
+  `job_definition` / `job_queue` to bypass registration.
+- Each stage's container environment is built by the plan and passed through unchanged: the
+  I/O URIs (both the neutral and the legacy `*_S3_URI` names), the stack's region as
+  `AWS_REGION` / `AWS_DEFAULT_REGION`, the run-level `environment`, then the stage's own.
+- Provenance matches a local run: `evidence_creator_id` is `repository:tag` (chained tools joined
+  with `+`), `evidence_creator_digest` the ECR digests of the images that ran. Each part file's
+  `row_num` is its line number; PheBee's import reads neither it nor the emitted `batch_id`.
 
-### Changed
+### Stack and permissions
 
-- Follows phebee-extraction v1.0.0 as retagged: the loader converts the subject column to a
-  string (`string_columns`), and the per-batch row-number blocks (`start_row_num`,
-  `row_num_stride`) and `phebee_batch_id` are gone, since PheBee's import reads neither
-  `row_num` nor the emitted `batch_id`. Each part file's `row_num` is its line number.
-- The core repository is public, so the `CORE_REPO_TOKEN` secret and the credential steps in
-  CI and the deploy workflow are removed.
-- Python 3.11 or later, matching the core; CI covers 3.11 to 3.14.
+- SAM template: data bucket, roles, the utility job definition and the state machine. Existing
+  Batch queues are passed in. Optional `S3AccessLogBucketName` / `S3AccessLogPrefix` and a
+  365-day default log retention let the stack pass CIS/HIPAA/NIST CloudFormation guardrail
+  hooks.
+- Tools run as a default role that can only read and write under the run's `batches/` prefix.
+  Tools needing more (Bedrock callers) run as a role named `{AppName}-tool-<name>`, the only
+  prefix the plan job may assign. `docs/tool-role.yaml` creates one per permission set, with
+  the default S3 policy, an optional Bedrock `InvokeModel` policy for given model ARNs, and any
+  attached managed policies.
+- Batch and ECR clients are created in an explicit region (Batch containers on EC2 have no
+  `AWS_REGION`), and the utility job definition sets `AWS_REGION` / `AWS_DEFAULT_REGION`.
 
-### Added
+### Deployment
 
-- The deploy workflow tags the utility image with `git describe` (the release tag when deploying
-  one) and the commit SHA; `scripts/build_image.sh --also-tag` pushes extra tags.
+- The contract is two steps: `scripts/build_image.sh --push --output` builds the utility image
+  from pinned wheels, pushes it and writes its digest-pinned URI; `sam deploy` takes that URI as
+  `UtilityImageUri`. Images are tagged from `git describe` plus any `--also-tag`, built for
+  `linux/arm64` by default (`PLATFORM` overrides; must match the queue's instances), and always
+  from a freshly pulled base image (`--pull`).
+- `.github/workflows/deploy.yml` runs both steps on GitHub Actions. It is manual only, takes
+  its settings from a GitHub environment, and gets AWS credentials through OIDC, so no keys are
+  stored. It is reusable (`workflow_call`): the recommended layout keeps this repository public
+  and runs deployments from a small private deploy repository holding the environments, via
+  `docs/deploy-caller.yml`, so account details never appear in public logs. It registers QEMU,
+  so the arm64 image builds on GitHub's x86 runners.
+- `docs/deploy-role.yaml` creates the deploy role: trusts GitHub's OIDC provider for one
+  repository and one environment, in either GitHub subject format (plain `owner/name`, or the
+  immutable `owner@id/repo@id` that repositories created after 15 July 2026 use), with
+  permissions limited to pushing the utility image and deploying this stack under the
+  application's names.
 
-- Initial scaffold: `plan` and `transform` jobs built on `phebee-extraction` v1.0.0, a Step
-  Functions definition that iterates the plan and submits Batch jobs, a SAM template, the
-  utility image, and tests that run without AWS.
-- Tools are specified at run time by image. `plan` registers a Batch job definition per
-  image and settings on first use (`{AppName}-{repository}-{hash}`) and reuses it afterwards;
-  the stack has no per-tool parameters. `gpu`, `vcpus` and `memory_mib` can be set per stage,
-  and an explicit `job_definition` / `job_queue` bypasses registration.
-- A deployment contract for pipelines: `scripts/build_image.sh --push --output` writes the
-  pushed image's digest-pinned URI for the deploy step, and `.github/workflows/deploy.yml` is a
-  manually triggered GitHub Actions deploy (OIDC role, per-environment variables) that doubles
-  as the reference for other CI systems. Images are built for `linux/arm64` by default (`PLATFORM`
-  overrides; the deploy workflow takes it from the environment), and must match the queue's
-  instance architecture.
-- Optional `S3AccessLogBucketName` / `S3AccessLogPrefix` for the data bucket's server access
-  logs, and a 365-day default log retention, so the stack passes CIS/HIPAA/NIST CloudFormation
-  guardrail hooks (the first deploy into an account with such hooks was rejected for
-  `S3_BUCKET_LOGGING_ENABLED`). Both are passed by the deploy workflow only when set.
-- The plan job failed on a real Batch instance with `NoRegionError`: Batch containers on EC2
-  have no `AWS_REGION`, and the Batch/ECR clients were created without one. Clients are now
-  created in an explicit region (the deployment's; for ECR, the registry's own region from the
-  image URI), and the utility job definition also sets `AWS_REGION` / `AWS_DEFAULT_REGION`.
-- `docs/deploy-role.yaml`: CloudFormation for the deploy role the workflow assumes. Trusts
-  GitHub's OIDC provider for one repository and one environment only, with permissions limited
-  to pushing the utility image and deploying this stack under the application's names.
-- Per-stage `job_role` (short name, expands to `{AppName}-tool-<name>`) or `job_role_arn`, and
-  `environment`, for tools that need permissions or settings beyond S3 (Bedrock callers). The
-  plan job may only assign roles named `{AppName}-tool-*`; `docs/tool-role.yaml` creates one
-  per permission set, with the default S3 policy, an optional Bedrock `InvokeModel` policy for
-  the given model ARNs, and any attached managed policies.
-  The plan builds each stage's full container environment, layering the I/O variables, the
-  stack's region (`AWS_REGION` / `AWS_DEFAULT_REGION`), the run-level `environment` and the
-  stage's own; the state machine passes it through unchanged.
+### Not yet
+
+- Triggering PheBee's bulk import at the end of a run.
+- Starting a run from an S3 upload.
+- Inputs in buckets other than the data bucket.
