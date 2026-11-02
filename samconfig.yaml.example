@@ -14,6 +14,9 @@ default:
     parameters:
       capabilities: CAPABILITY_IAM CAPABILITY_NAMED_IAM
       confirm_changeset: true
+      # Where SAM uploads the packaged template. resolve_s3 uses SAM's own managed bucket,
+      # fine for a person with broad permissions; the deploy workflow instead uses the bucket
+      # docs/deploy-role.yaml arranges (s3_bucket: <its ArtifactBucketName output>).
       resolve_s3: true
       parameter_overrides:
         - AppName=phebee-extraction

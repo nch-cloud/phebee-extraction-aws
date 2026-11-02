@@ -134,6 +134,7 @@ Whichever repository runs the workflow, each environment holds these variables:
 |---|---|
 | `AWS_REGION` | Region to deploy to |
 | `AWS_DEPLOY_ROLE_ARN` | The deploy role (next section): trusts GitHub's OIDC provider for the repository that runs the workflow, may push the utility image and run CloudFormation for the stack |
+| `SAM_ARTIFACT_BUCKET` | Bucket SAM uploads the packaged template to: the deploy-role stack's `ArtifactBucketName` output (an existing bucket you named, or one it created) |
 | `UTILITY_ECR_REPOSITORY` | ECR repository URI for the utility image |
 | `STACK_NAME`, `APP_NAME` | Stack name and the `AppName` parameter |
 | `CPU_JOB_QUEUE_ARN`, `GPU_JOB_QUEUE_ARN` | Existing Batch queues (`GPU_JOB_QUEUE_ARN` may be empty) |
@@ -144,7 +145,12 @@ Other systems (CodePipeline, Jenkins, GitLab CI) map onto the same two steps; th
 file shows the exact commands.
 
 **The AWS side: the deploy role.** [`docs/deploy-role.yaml`](docs/deploy-role.yaml) creates
-the role the workflow assumes. Deploy it once per account and environment, by hand, naming the
+the role the workflow assumes, and arranges the bucket SAM uploads the packaged template to:
+pass an existing one as `ArtifactBucketName` (an organisation-wide CloudFormation artifacts
+bucket, say; the role gets access only under the stack's own prefix) or leave it empty and the
+stack creates one. SAM's own `--resolve-s3` is not used: it manages a shared account-wide
+stack this role deliberately cannot touch. Deploy it once per account and environment, by
+hand, naming the
 repository whose Actions runs will deploy (the deploy repository in the layout above). The
 name must match the token's subject exactly, and GitHub has two formats: repositories created
 after 15 July 2026 get an immutable subject that embeds the owner and repository IDs
@@ -161,12 +167,17 @@ aws cloudformation deploy --stack-name phebee-extraction-deploy-role-dev \
   --template-file docs/deploy-role.yaml --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides GitHubRepository=my-org@188507437/my-deploy-repo@1440223880 \
                         GitHubEnvironment=dev \
-                        CreateOidcProvider=false   # true only if the account has no GitHub OIDC provider yet
+                        CreateOidcProvider=false \
+                        ArtifactBucketName=<existing artifacts bucket, or omit to create one>
 aws cloudformation describe-stacks --stack-name phebee-extraction-deploy-role-dev \
-  --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue" --output text
+  --query "Stacks[0].Outputs[].[OutputKey,OutputValue]" --output text
 ```
 
-Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. The role's trust policy
+`CreateOidcProvider=true` only if the account has no GitHub OIDC provider yet. When the stack
+creates the artifact bucket and your guardrails require S3 access logging, also pass
+`S3AccessLogBucketName`, as for the application stack. Put the `DeployRoleArn` output in the
+environment's `AWS_DEPLOY_ROLE_ARN` and `ArtifactBucketName` in `SAM_ARTIFACT_BUCKET`. The
+role's trust policy
 accepts only tokens whose subject is `repo:<repository>:environment:<environment>`. GitHub sets
 that subject from the repository a run starts in, even when the job's steps come from a
 reusable workflow elsewhere, which is why the deploy repository is the one to name. A wrong
@@ -344,7 +355,7 @@ src/phebee_extraction_aws/
   cli.py          phebee-extract-aws plan | transform
 statemachine/extraction.asl.json   the Step Functions definition
 template.yaml                      SAM: bucket, roles, utility job definition, state machine
-docs/deploy-role.yaml              the OIDC deploy role for the GitHub Actions workflow
+docs/deploy-role.yaml              the OIDC deploy role and SAM artifact bucket for the workflow
 docs/deploy-caller.yml             the one-job workflow for a separate deploy repository
 docs/tool-role.yaml                a job role for a tool needing permissions beyond S3
 docker/Dockerfile, scripts/build_image.sh   the utility image

@@ -61,7 +61,12 @@ Batch job definitions and the orchestration. Python 3.11 or later; CI covers 3.1
   repository and one environment, in either GitHub subject format (plain `owner/name`, or the
   immutable `owner@id/repo@id` that repositories created after 15 July 2026 use), with
   permissions limited to pushing the utility image and deploying this stack under the
-  application's names.
+  application's names. It also arranges the bucket SAM uploads the packaged template to (the
+  `SAM_ARTIFACT_BUCKET` variable): an existing one named in `ArtifactBucketName`, accessible
+  only under the stack's prefix, or `{AppName}-deploy-{account}-{region}` created on the spot.
+  SAM's own `--resolve-s3` is not used: it manages a shared account-wide stack the role
+  deliberately cannot touch, with a bucket that guardrail hooks reject for lacking access
+  logging.
 
 ### Not yet
 
