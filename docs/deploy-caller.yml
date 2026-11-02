@@ -15,7 +15,9 @@
 #   4. Pin `uses:` below to the release tag you want to deploy. The image is built from that
 #      tag, so the stack and its provenance follow it.
 #
-# If your organisation restricts which actions and reusable workflows may run, allow
+# The repository that owns the reusable workflow must be public: the job checks out that
+# repository's source to build the image, and this run's token can read nothing else. If your
+# organisation restricts which actions and reusable workflows may run, allow
 # `nch-cloud/phebee-extraction-aws/.github/workflows/deploy.yml@*` (same-organisation
 # repositories are usually allowed already).
 

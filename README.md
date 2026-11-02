@@ -26,10 +26,9 @@ execution input ──► Plan (Batch, utility image)
                                        ──► s3://{bucket}/{prefix}/jsonl/part-{batch}.json
 ```
 
-The `plan` job decides everything: the chain of input/output URIs for each stage, which job
-definition and queue each stage uses, and the row-number block each batch may use. The state
-machine only iterates the plan and submits jobs, so the logic lives in Python where it is
-unit-tested without AWS.
+The `plan` job decides everything: the chain of input/output URIs for each stage and which
+job definition and queue each stage uses. The state machine only iterates the plan and submits
+jobs, so the logic lives in Python where it is unit-tested without AWS.
 
 Tools are specified at run time. The execution input names each tool's image; `plan`
 registers a Batch job definition for it (named `{AppName}-{repository}-{hash}`) the first
@@ -95,20 +94,46 @@ guardrails, both can be left alone.
 
 The deployment contract is two steps, and any CI system can run them:
 
-1. Build and push the utility image and capture its URI. The workflow tags it with
-   `git describe` and the commit SHA; any immutable scheme works. `scripts/build_image.sh --push <repo> --output image-uri.txt` does this
-   and writes the digest-pinned URI to the file.
+1. Build and push the utility image and capture its URI.
+   `scripts/build_image.sh --push <repo> --output image-uri.txt` does this and writes the
+   digest-pinned URI to the file. It tags the image from `git describe`; any immutable scheme
+   works.
 2. `sam build && sam deploy` with the stack parameters, passing that URI as `UtilityImageUri`.
 
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml) is a working GitHub Actions
-version. It runs only when triggered by hand (`workflow_dispatch`), against a GitHub
-environment you choose, and assumes an AWS role through OIDC, so no AWS keys are stored in
-GitHub. To use it, create an environment (for example `dev`) with these variables:
+version of both steps. It only ever runs when a person starts it, against a GitHub
+environment they choose, and it gets AWS credentials by assuming a role through GitHub's
+OIDC provider, so no AWS keys are stored anywhere.
+
+**Recommended layout: two repositories.** Keep this repository (or your fork of it) public
+and holding only code. Put the account details in a small second repository of your own,
+private or internal, that holds the GitHub environments (`dev`, `prod`, ...) and a one-job
+workflow calling this one at a release tag.
+[`docs/deploy-caller.yml`](docs/deploy-caller.yml) is that workflow, complete. Deploy runs,
+their logs and their summaries then belong to the deploy repository, so account IDs, ARNs and
+bucket names never appear in public logs, and the environments' protection rules (required
+reviewers, deployment from tags only) decide who may deploy to what. To set it up:
+
+1. Create the deploy repository and copy `docs/deploy-caller.yml` to its
+   `.github/workflows/deploy.yml`. Pin `uses:` to the release tag you want to deploy.
+2. In the target account, create the deploy role (next section) with `GitHubRepository` set
+   to the deploy repository.
+3. In the deploy repository, create an environment per target with the variables below.
+4. Actions tab, **Run workflow**, choose the environment.
+
+Two requirements: the repository holding this workflow must be public, because the job checks
+out its own source to build the image and the caller's token can read nothing else; and your
+organisation's Actions policy must allow reusable workflows from it. The simpler alternative,
+for a private copy of this repository, is to create the environments in that copy and use its
+own **Run workflow** button; account details then appear in its logs, which is fine when the
+repository is private.
+
+Whichever repository runs the workflow, each environment holds these variables:
 
 | Variable | Value |
 |---|---|
 | `AWS_REGION` | Region to deploy to |
-| `AWS_DEPLOY_ROLE_ARN` | Role trusting GitHub's OIDC provider for this repository, allowed to push to the ECR repository and run CloudFormation for the stack |
+| `AWS_DEPLOY_ROLE_ARN` | The deploy role (next section): trusts GitHub's OIDC provider for the repository that runs the workflow, may push the utility image and run CloudFormation for the stack |
 | `UTILITY_ECR_REPOSITORY` | ECR repository URI for the utility image |
 | `STACK_NAME`, `APP_NAME` | Stack name and the `AppName` parameter |
 | `CPU_JOB_QUEUE_ARN`, `GPU_JOB_QUEUE_ARN` | Existing Batch queues (`GPU_JOB_QUEUE_ARN` may be empty) |
@@ -118,38 +143,30 @@ GitHub. To use it, create an environment (for example `dev`) with these variable
 Other systems (CodePipeline, Jenkins, GitLab CI) map onto the same two steps; the workflow
 file shows the exact commands.
 
-**Keeping account details out of public logs.** Variables are printed in Actions logs, and
-the logs of a public repository are public. Account IDs, ARNs and bucket names grant nothing
-on their own, but if your organisation would rather not publish them, run the deployment
-from a private repository instead: the workflow is reusable (`workflow_call`), and
-[`docs/deploy-caller.yml`](docs/deploy-caller.yml) is a complete caller. Copy it into a
-private repository, create the environments and their variables there, and pin `uses:` to
-the release tag to deploy. The run and its logs then belong to the private repository, and
-this one holds only code. The deploy role's `GitHubRepository` must then name the private
-repository: the OIDC subject is the repository a run starts in, not the one that owns the
-workflow file.
-
-**The AWS side: the deploy role.** The workflow gets credentials by assuming an IAM role
-through GitHub's OIDC provider, so no AWS keys are stored. [`docs/deploy-role.yaml`](docs/deploy-role.yaml)
-creates that role. Deploy it once per account and environment, by hand:
+**The AWS side: the deploy role.** [`docs/deploy-role.yaml`](docs/deploy-role.yaml) creates
+the role the workflow assumes. Deploy it once per account and environment, by hand, naming the
+repository whose Actions runs will deploy (the deploy repository in the layout above):
 
 ```bash
 aws cloudformation deploy --stack-name phebee-extraction-deploy-role-dev \
   --template-file docs/deploy-role.yaml --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides GitHubRepository=nch-cloud/phebee-extraction-aws GitHubEnvironment=dev \
+  --parameter-overrides GitHubRepository=<owner/name of the repository that runs the workflow> \
+                        GitHubEnvironment=dev \
                         CreateOidcProvider=false   # true only if the account has no GitHub OIDC provider yet
 aws cloudformation describe-stacks --stack-name phebee-extraction-deploy-role-dev \
   --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue" --output text
 ```
 
-Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. `GitHubRepository` is the
-repository whose Actions runs deploy: this one, or the private caller described above. The
-role's trust policy accepts only tokens whose subject is
-`repo:<repository>:environment:<environment>`, so a fork, another repository, a pull request,
-or a run against a different environment cannot assume it; a `prod` role is only reachable
-through the `prod` environment and whatever reviewer rules you put on it. Its permissions are limited to pushing the utility image and deploying this one
-stack and the resources it declares, under this application's names. The role is public-safe
-by design: the repository can be public and the role stays usable only from your copy of it.
+Put the printed ARN in the environment's `AWS_DEPLOY_ROLE_ARN`. The role's trust policy
+accepts only tokens whose subject is `repo:<repository>:environment:<environment>`. GitHub sets
+that subject from the repository a run starts in, even when the job's steps come from a
+reusable workflow elsewhere, which is why the deploy repository is the one to name. A fork,
+another repository, a pull request, or a run against a different environment cannot assume
+the role, and a `prod` role is only reachable through the `prod` environment and whatever
+reviewer rules you put on it. Its permissions are limited to pushing the utility image and
+deploying this one stack and the resources it declares, under this application's names. The
+role is public-safe by design: this repository can be public and the role stays usable only
+from the repository you named.
 
 ## Run
 
@@ -317,7 +334,7 @@ src/phebee_extraction_aws/
 statemachine/extraction.asl.json   the Step Functions definition
 template.yaml                      SAM: bucket, roles, utility job definition, state machine
 docs/deploy-role.yaml              the OIDC deploy role for the GitHub Actions workflow
-docs/deploy-caller.yml             runs the deploy workflow from a private repository
+docs/deploy-caller.yml             the one-job workflow for a separate deploy repository
 docs/tool-role.yaml                a job role for a tool needing permissions beyond S3
 docker/Dockerfile, scripts/build_image.sh   the utility image
 tests/                             fakes for S3/ECR/Batch; plan -> transform end to end;
