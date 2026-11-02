@@ -47,7 +47,8 @@ CORE_TAG="$(sed -n 's/^phebee-extraction *= *{.*tag *= *"\([^"]*\)".*/\1/p' pypr
 uv run --with pip python -m pip wheel --no-deps -q -w dist "phebee-extraction @ git+${CORE_GIT}@${CORE_TAG}"
 
 echo "Building ${LOCAL_IMAGE} for ${PLATFORM}"
-docker build --platform "${PLATFORM}" -f docker/Dockerfile -t "${LOCAL_IMAGE}" .
+# --pull: always fetch the current base image, so a rebuild picks up security fixes in it
+docker build --pull --platform "${PLATFORM}" -f docker/Dockerfile -t "${LOCAL_IMAGE}" .
 RESULT="${LOCAL_IMAGE}"
 
 if [[ -n "$PUSH_REPO" ]]; then
