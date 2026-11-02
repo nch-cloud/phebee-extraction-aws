@@ -10,12 +10,14 @@
 #
 # Either way the GitHub environment (e.g. `dev`, `prod`) belongs to the repository the run
 # starts in, and holds:
-#   variables  AWS_REGION, AWS_DEPLOY_ROLE_ARN, UTILITY_ECR_REPOSITORY, STACK_NAME, APP_NAME,
-#              CPU_JOB_QUEUE_ARN, GPU_JOB_QUEUE_ARN (may be empty),
+#   variables  AWS_REGION, AWS_DEPLOY_ROLE_ARN, SAM_ARTIFACT_BUCKET, UTILITY_ECR_REPOSITORY,
+#              STACK_NAME, APP_NAME, CPU_JOB_QUEUE_ARN, GPU_JOB_QUEUE_ARN (may be empty),
 #              PLATFORM (linux/arm64 or linux/amd64; must match the CPU queue's instances),
 #              S3_ACCESS_LOG_BUCKET (optional; required where guardrails demand S3 access logging)
 # AWS_DEPLOY_ROLE_ARN is a role that trusts GitHub's OIDC provider for that repository and
-# can push to the ECR repository and run CloudFormation for the stack. No AWS keys are stored.
+# can push to the ECR repository and run CloudFormation for the stack; SAM_ARTIFACT_BUCKET is
+# where SAM uploads the packaged template. docs/deploy-role.yaml creates both. No AWS keys are
+# stored.
 #
 # This is also the reference for plugging this repo into another deployment system: the whole
 # contract is the two steps "build and push the image" and "sam deploy with these parameters".
@@ -101,7 +103,8 @@ jobs:
           sam deploy \
             --stack-name "${{ vars.STACK_NAME }}" \
             --region "${{ vars.AWS_REGION }}" \
-            --resolve-s3 \
+            --s3-bucket "${{ vars.SAM_ARTIFACT_BUCKET }}" \
+            --s3-prefix "${{ vars.STACK_NAME }}" \
             --capabilities CAPABILITY_IAM CAPABILITY_NAMED_IAM \
             --no-confirm-changeset \
             --no-fail-on-empty-changeset \

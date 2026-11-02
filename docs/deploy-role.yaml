@@ -1,9 +1,10 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >
-  Deploy role for phebee-extraction-aws's GitHub Actions workflow (.github/workflows/deploy.yml).
-  Deployed once per target account, by hand, before the first run of the workflow. The role
-  trusts GitHub's OIDC provider for one repository and one GitHub environment, so only a run of
-  that environment in that repository can assume it. No AWS keys are stored in GitHub.
+  Prerequisites for phebee-extraction-aws's GitHub Actions workflow (.github/workflows/deploy.yml):
+  the deploy role and the bucket SAM uploads the packaged template to. Deployed once per target
+  account, by hand, before the first run of the workflow. The role trusts GitHub's OIDC provider
+  for one repository and one GitHub environment, so only a run of that environment in that
+  repository can assume it. No AWS keys are stored in GitHub.
 
 Parameters:
   GitHubRepository:
@@ -41,9 +42,30 @@ Parameters:
     Description: >
       Create the GitHub OIDC identity provider. An account has at most one; set true only if
       no other workflow in this account already deploys from GitHub Actions.
+  ArtifactBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional. An existing bucket for SAM to upload the packaged template to, for example an
+      organisation-wide CloudFormation artifacts bucket. The role may read and write only under
+      the prefix named after the application stack. Leave empty to have this stack create a
+      bucket of its own, {AppName}-deploy-{account}-{region}.
+  S3AccessLogBucketName:
+    Type: String
+    Default: ""
+    Description: >
+      Optional, used only when this stack creates the artifact bucket. An existing bucket to
+      receive its server access logs; set it where CloudFormation guardrails require S3 access
+      logging (CIS), the same value as the application stack's parameter of the same name.
+  S3AccessLogPrefix:
+    Type: String
+    Default: phebee-extraction-deploy-access-logs/
+    Description: Prefix for the access logs in that bucket.
 
 Conditions:
   ShouldCreateOidcProvider: !Equals [!Ref CreateOidcProvider, "true"]
+  ShouldCreateArtifactBucket: !Equals [!Ref ArtifactBucketName, ""]
+  ShouldEnableS3Logging: !Not [!Equals [!Ref S3AccessLogBucketName, ""]]
 
 Resources:
   GitHubOidcProvider:
@@ -55,6 +77,36 @@ Resources:
       # GitHub's root CA thumbprint. AWS now verifies GitHub's certificate itself, so this
       # value is retained for compatibility rather than relied on.
       ThumbprintList: [6938fd4d98bab03faadb97b34396831e3780aea1]
+
+  # Where `sam deploy --s3-bucket` uploads the packaged template (the state machine definition
+  # is a file), unless an existing bucket is named in ArtifactBucketName. SAM's own
+  # `--resolve-s3` would instead create and keep updating a shared aws-sam-cli-managed-default
+  # stack, which needs account-wide permissions this role does not have and a bucket without
+  # access logging that guardrail hooks reject.
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    Condition: ShouldCreateArtifactBucket
+    Properties:
+      BucketName: !Sub "${AppName}-deploy-${AWS::AccountId}-${AWS::Region}"
+      LoggingConfiguration: !If
+        - ShouldEnableS3Logging
+        - DestinationBucketName: !Ref S3AccessLogBucketName
+          LogFilePrefix: !Ref S3AccessLogPrefix
+        - !Ref AWS::NoValue
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-old-artifacts
+            Status: Enabled
+            ExpirationInDays: 30
 
   DeployRole:
     Type: AWS::IAM::Role
@@ -120,23 +172,25 @@ Resources:
               - Effect: Allow
                 Action: cloudformation:ListStacks
                 Resource: "*"
-              # The SAM CLI's managed artifact bucket (--resolve-s3)
+              # Upload the packaged template to the artifact bucket (sam deploy --s3-bucket
+              # --s3-prefix <StackName>): the whole bucket if this stack created it, otherwise
+              # only this stack's prefix in the shared bucket.
               - Effect: Allow
                 Action:
-                  - s3:CreateBucket
                   - s3:GetBucketLocation
                   - s3:ListBucket
+                Resource: !If
+                  - ShouldCreateArtifactBucket
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}"
+              - Effect: Allow
+                Action:
                   - s3:GetObject
                   - s3:PutObject
-                  - s3:GetBucketPolicy
-                  - s3:PutBucketPolicy
-                  - s3:PutBucketVersioning
-                  - s3:PutEncryptionConfiguration
-                  - s3:PutBucketPublicAccessBlock
-                  - s3:GetEncryptionConfiguration
-                Resource:
-                  - "arn:aws:s3:::aws-sam-cli-managed-default*"
-                  - "arn:aws:s3:::aws-sam-cli-managed-default*/*"
+                Resource: !If
+                  - ShouldCreateArtifactBucket
+                  - !Sub "${ArtifactBucket.Arn}/*"
+                  - !Sub "arn:aws:s3:::${ArtifactBucketName}/${StackName}/*"
 
         - PolicyName: ManageStackResources
           # What CloudFormation creates on the role's behalf, scoped to this application's names
@@ -206,3 +260,6 @@ Outputs:
   TrustedSubject:
     Description: The exact OIDC subject this role trusts.
     Value: !Sub "repo:${GitHubRepository}:environment:${GitHubEnvironment}"
+  ArtifactBucketName:
+    Description: Set this as the SAM_ARTIFACT_BUCKET variable of the GitHub environment.
+    Value: !If [ShouldCreateArtifactBucket, !Ref ArtifactBucket, !Ref ArtifactBucketName]
