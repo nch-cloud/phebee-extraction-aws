@@ -451,3 +451,44 @@ def test_cli_failure_exits_1(tmp_path, clients, monkeypatch):
         deployment=DEPLOYMENT,
     )
     assert rc == 1
+
+
+# ---------------------------------------------------------------------------- note dates
+
+
+def test_note_timestamp_column_reaches_the_transform_item(tmp_path, clients):
+    plan = run_plan(clients, tmp_path, note_timestamp_column="note_date")
+    t = plan["items"][0]["transform"]
+    assert t["note_timestamp_column"] == "note_date"
+    assert plan["config"]["note_timestamp_column"] == "note_date"
+
+
+def test_note_timestamp_column_defaults_to_note_timestamp(tmp_path, clients):
+    plan = run_plan(clients, tmp_path)
+    assert plan["items"][0]["transform"]["note_timestamp_column"] == "note_timestamp"
+
+
+def test_transform_writes_the_notes_own_date_and_null_when_it_has_none(tmp_path, clients):
+    """The date comes from the named input column (the pretend tool drops it, as real ones do);
+    a note with no value is null, never the run date"""
+    s3c, ecr, batch = clients
+    dated = [
+        {"note_id": "n1", "subject_id": "p1", "note_date": "2024-03-04", "text": "Fever."},
+        {"note_id": "n2", "subject_id": "p1", "note_date": None, "text": "Chronic headaches."},
+    ]
+    s3c.put("data", "in/notes.jsonl", "".join(json.dumps(n) + "\n" for n in dated))
+    plan = run_plan(clients, tmp_path, note_timestamp_column="note_date", batch_size=10)
+    item = plan["items"][0]
+    pretend_tool_run(s3c, item)
+
+    result = transform_batch(item, str(tmp_path / "t"), S3(s3c))
+
+    body = s3c.objects[("data", "runs/r1/jsonl/part-batch_000001.json")].decode()
+    by_term = {
+        json.loads(line)["term_iri"].rsplit("/", 1)[-1]: json.loads(line)["evidence"][0]
+        for line in body.splitlines()
+    }
+    assert by_term["HP_0001945"]["note_timestamp"] == "2024-03-04"
+    assert by_term["HP_0002315"]["note_timestamp"] is None
+    assert result["missing_note_timestamp"] == 1
+    assert "NaN" not in body

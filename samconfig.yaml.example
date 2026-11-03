@@ -26,4 +26,4 @@ default:
         - CPUJobQueueArn=arn:aws:batch:us-east-2:123456789012:job-queue/cpu-queue
         # Omit this line entirely if you have no GPU queue; SAM rejects an empty value.
         - GPUJobQueueArn=arn:aws:batch:us-east-2:123456789012:job-queue/gpu-queue
-        - UtilityImageUri=123456789012.dkr.ecr.us-east-2.amazonaws.com/phebee-extraction-aws:v0.1.0
+        - UtilityImageUri=123456789012.dkr.ecr.us-east-2.amazonaws.com/phebee-extraction-aws:v0.1.1
