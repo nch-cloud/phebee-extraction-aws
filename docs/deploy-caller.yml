@@ -39,6 +39,6 @@ permissions:
 
 jobs:
   deploy:
-    uses: nch-cloud/phebee-extraction-aws/.github/workflows/deploy.yml@v0.1.0
+    uses: nch-cloud/phebee-extraction-aws/.github/workflows/deploy.yml@v0.1.1
     with:
       environment: ${{ inputs.environment }}

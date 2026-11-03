@@ -232,8 +232,13 @@ tool), `environment` (extra variables for the tool), `job_role` (a role with per
 beyond S3, see below), and `job_definition` / `job_queue` to bypass registration and use ones
 you manage.
 
-Optional run keys: `input_format` (`auto`, `json`, `jsonl`, `csv`, `parquet`) and
-`environment` (variables for every stage; see the next section).
+Optional run keys: `input_format` (`auto`, `json`, `jsonl`, `csv`, `parquet`),
+`note_timestamp_column` and `environment` (variables for every stage; see the next section).
+
+`note_timestamp_column` names the input column holding each note's clinical date, which becomes
+PheBee's `note_timestamp` (the date the phenotype was observed; default `note_timestamp`). A
+note without a value gets `null`, never the run date, and the transform job's result counts
+them (`missing_note_timestamp`).
 
 ### Tools that need other AWS permissions or settings
 

@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-03
+
+Requires `phebee-extraction` 1.0.1.
+
+### Fixed
+
+- Every record's `note_timestamp` was the date the run happened to execute, not the note's
+  date (the core's fallback when the input had no column of that exact name). The run input
+  takes a new `note_timestamp_column` naming the column that holds each note's clinical date;
+  notes without a value get `null`, and the transform job's result counts them as
+  `missing_note_timestamp`.
+- Empty cells in CSV or Parquet input are `null` in the output instead of the invalid JSON
+  literal `NaN`.
+
 ## [0.1.0] - 2026-11-02
 
 First release: an AWS deployment of [phebee-extraction](https://github.com/nch-cloud/phebee-extraction)

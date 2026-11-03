@@ -6,10 +6,10 @@ resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'",
-    "python_full_version < '3.12' and sys_platform == 'win32'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten'",
     "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
@@ -494,18 +494,20 @@ wheels = [
 
 [[package]]
 name = "phebee-extraction"
-version = "1.0.0"
-source = { git = "https://github.com/nch-cloud/phebee-extraction.git?tag=v1.0.0#4d6bd17fa30eb2ed1944f8b5ac69065e641eee58" }
+version = "1.0.1"
+source = { git = "https://github.com/nch-cloud/phebee-extraction.git?tag=v1.0.1#376d03e42e47a40f643273006bed9237a78a04ff" }
 dependencies = [
+    { name = "certifi" },
     { name = "docker" },
     { name = "pandas" },
     { name = "pyarrow" },
     { name = "tqdm" },
+    { name = "urllib3" },
 ]
 
 [[package]]
 name = "phebee-extraction-aws"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "boto3" },
@@ -522,7 +524,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "boto3", specifier = ">=1.34" },
-    { name = "phebee-extraction", git = "https://github.com/nch-cloud/phebee-extraction.git?tag=v1.0.0" },
+    { name = "phebee-extraction", git = "https://github.com/nch-cloud/phebee-extraction.git?tag=v1.0.1" },
 ]
 
 [package.metadata.requires-dev]

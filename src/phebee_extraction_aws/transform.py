@@ -40,6 +40,7 @@ def transform_batch(item: dict, workdir: str, s3: S3 | None = None) -> dict:
     config = PheBeeConfig(
         project_id=spec["project_id"],
         subject_id_column=spec["subject_id_column"],
+        note_timestamp_column=spec.get("note_timestamp_column", "note_timestamp"),
         image_refs=spec["image_refs"],
     )
     part_path = os.path.join(workdir, "part.json")
@@ -55,4 +56,5 @@ def transform_batch(item: dict, workdir: str, s3: S3 | None = None) -> dict:
         "records_written": stats.records_written,
         "skipped_no_subject": stats.skipped_no_subject,
         "skipped_no_annotations": stats.skipped_no_annotations,
+        "missing_note_timestamp": stats.missing_note_timestamp,
     }

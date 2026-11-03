@@ -90,6 +90,9 @@ class RunConfig:
     id_column: str = "note_id"
     text_column: str = "text"
     subject_id_column: str = "subject_id"
+    # Input column holding each note's clinical date, written as PheBee's note_timestamp.
+    # Notes without a value get null; the date is never invented.
+    note_timestamp_column: str = "note_timestamp"
     # Variables every stage receives (model ids, regions, ...); a stage may override them
     environment: dict[str, str] = field(default_factory=dict)
     extra: dict = field(default_factory=dict)  # unknown keys, kept so nothing is lost
@@ -259,6 +262,7 @@ def plan_run(
                     "part_uri": str(run.join("jsonl", f"part-{batch.batch_id}.json")),
                     "project_id": config.project_id,
                     "subject_id_column": config.subject_id_column,
+                    "note_timestamp_column": config.note_timestamp_column,
                     "image_refs": image_refs,
                 },
             }
